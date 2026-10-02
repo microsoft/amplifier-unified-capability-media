@@ -1,0 +1,20 @@
+{
+  "name": "@amplifier/unified-media-capability",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": "./src/index.js",
+  "files": [
+    "src",
+    "python/amplifier_unified_media/*.py",
+    "python/amplifier_unified_media/*.json",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
