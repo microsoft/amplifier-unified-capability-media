@@ -41,7 +41,7 @@ class Rpc:
     def context(args):
         value={key:args.get('context',{}).get(key) for key in ('fenceId','commandId','purpose','instanceId','dataScope')}
         value['ownerId']=args.get('ownerId')
-        if any(not isinstance(v,str) or not 1<=len(v)<=200 or any(ord(c)<32 for c in v) for v in value.values()) or value['purpose'] not in ('distribution-update','recovery','service-stop'):
+        if any(not isinstance(v,str) or not 1<=len(v)<=200 or any(ord(c)<32 for c in v) for v in value.values()) or value['purpose'] not in ('distribution-update','recovery','service-stop','retention-hide'):
             raise ValueError('Bounded exact media fence context required')
         if value['purpose']=='service-stop':
             value['serviceIdentity']=service_identity(args['context'].get('serviceIdentity'))
