@@ -114,3 +114,10 @@ This release does not claim generic automatic updates across that unresolved cas
 Qualification uses the actual private Python worker and synthetic immutable PNG
 validation, plus provider fixtures and a SIGKILL/restart owner test. It does not
 establish physical microphone/screen or authenticated provider acceptance.
+
+Release retry proof is immutable: the owner atomically retains the canonical
+outcome and entire proof with its released receipt. After acknowledgement loss
+or restart, only the identical context, outcome and proof are accepted; changing
+the receipt identity, authority scope or outcome is rejected. JSON object key
+order is irrelevant. Older released receipts without exact proof evidence are
+not inferred or rewritten into verified release evidence.

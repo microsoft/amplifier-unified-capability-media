@@ -1,3 +1,5 @@
+const canonicalProof=value=>Array.isArray(value)?value.map(canonicalProof):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalProof(value[key])])):value;
+const releaseSignature=(outcome,proof)=>JSON.stringify([outcome,canonicalProof(proof)]);
 import {DatabaseSync} from 'node:sqlite';
 import {join} from 'node:path';
 const token=(value,name)=>{if(typeof value!=='string'||!value||value.length>200||/[\x00-\x1f]/.test(value))throw Error(`Invalid ${name}`);return value};
@@ -40,14 +42,14 @@ export class MediaQuiescence {
  clear(value){this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT OR REPLACE INTO receipts VALUES(?,?)').run(value.fenceId,JSON.stringify(value));this.db.prepare('DELETE FROM fence WHERE id=1').run();this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}}
  async release(ownerId,context,outcome,proof){
   if(this.transition)throw Error('Media quiescence transition running');
-  const old=this.current();if(!old){const row=this.db.prepare('SELECT value FROM receipts WHERE id=?').get(context.fenceId),prior=row&&JSON.parse(row.value);if(prior?.state==='released'&&prior.ownerId===ownerId&&prior.commandId===context.commandId)return;throw Error('Exact retained media fence required');}
+  const old=this.current();if(!old){const row=this.db.prepare('SELECT value FROM receipts WHERE id=?').get(context.fenceId),prior=row&&JSON.parse(row.value);if(prior?.state==='released'&&prior.ownerId===ownerId&&['fenceId','commandId','purpose','instanceId','dataScope'].every(key=>prior[key]===context[key])&&prior.releaseSignature===releaseSignature(outcome,proof))return;throw Error('Exact retained media fence required');}
   if(old.ownerId!==ownerId||['fenceId','commandId','purpose','instanceId','dataScope'].some(key=>old[key]!==context[key]))throw Error('Exact media fence context required');
   if(outcome==='unknown'){old.state='unknown';this.save(old);return;}
   const refused=proof?.kind==='admission-refused'&&old.state==='held'&&outcome==='unchanged';
   const verified=proof?.verified===true&&proof.fenceId===old.fenceId&&proof.commandId===old.commandId&&proof.dataScope===old.dataScope&&proof.outcome===outcome&&['ready','unchanged'].includes(outcome)&&((proof.instanceId===old.instanceId)===(outcome==='unchanged'))&&typeof proof.instanceId==='string'&&!!proof.instanceId&&typeof proof.receiptId==='string'&&!!proof.receiptId;
   if(!refused&&!verified)throw Error('Authoritative exact media release proof required');
   this.transition=true;
-  try{const worker=this.worker();if(worker){const result=await worker.request('quiescence.release',{ownerId,context:old,outcome,proof});if(result.released!==true)throw Error('Media worker release remains unconfirmed');}this.clear({...old,state:'released',outcome});}
+  try{const worker=this.worker();if(worker){const result=await worker.request('quiescence.release',{ownerId,context:old,outcome,proof});if(result.released!==true)throw Error('Media worker release remains unconfirmed');}this.clear({...old,state:'released',outcome,releaseSignature:releaseSignature(outcome,proof)});}
   catch(error){old.state='unknown';this.save(old);throw error;}finally{this.transition=false;}
  }
  close(){this.db.close();this.lock.exec('ROLLBACK');this.lock.close();}

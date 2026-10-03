@@ -57,7 +57,7 @@ class Rpc:
         if method=='quiescence.release':
             context=self.context(args);old=self.fence
             if not old:
-                if self.released.get(context['fenceId'])==context:return {'released':True,'duplicate':True}
+                if self.released.get(context['fenceId'])=={'context':context,'outcome':args['outcome'],'proof':args.get('proof')}:return {'released':True,'duplicate':True}
                 raise ValueError('Exact media worker fence required')
             if old['ownerId']!=args['ownerId'] or any(old[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')):raise ValueError('Different media worker fence')
             if args['outcome']=='unknown':return {'released':False,'intakeClosed':True}
@@ -65,7 +65,7 @@ class Rpc:
             refused=proof=={'kind':'admission-refused'} and outcome=='unchanged'
             verified=proof.get('verified') is True and all(proof.get(key)==old[key] for key in ('fenceId','commandId','dataScope')) and proof.get('outcome')==outcome and outcome in ('ready','unchanged') and bool(proof.get('receiptId')) and bool(proof.get('instanceId')) and ((proof['instanceId']==old['instanceId'])==(outcome=='unchanged'))
             if not refused and not verified:raise ValueError('Exact verified media worker release proof required')
-            self.released[context['fenceId']]=context
+            self.released[context['fenceId']]={'context':context,'outcome':args['outcome'],'proof':args.get('proof')}
             while len(self.released)>256:self.released.pop(next(iter(self.released)))
             self.fence=None;return {'released':True}
         if self.fence:raise ValueError('Media worker intake closed for quiescence; no new effect admitted')

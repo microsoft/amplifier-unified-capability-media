@@ -100,3 +100,13 @@ async def test_actual_stdio_worker_gate_has_no_device_or_provider_effect():
         assert notices and all(row['method'] == 'quiescence/mayBeIdle' for row in notices)
     finally:
         child.stdin.close(); await asyncio.wait_for(child.wait(), 5)
+
+@pytest.mark.asyncio
+async def test_worker_release_retry_binds_exact_outcome_and_proof():
+    rpc=Rpc();rpc.send=lambda _:None
+    await rpc.dispatch('quiescence.acquire',ARGS)
+    exact={**ARGS,'outcome':'unchanged','proof':PROOF}
+    assert (await rpc.dispatch('quiescence.release',exact))['released']
+    assert (await rpc.dispatch('quiescence.release',exact))['duplicate']
+    for changed in [{**exact,'proof':{**PROOF,'receiptId':'other'}},{**exact,'outcome':'unknown'},{**exact,'context':{**CONTEXT,'dataScope':'foreign'}}]:
+        with pytest.raises(ValueError,match='Exact media worker fence'):await rpc.dispatch('quiescence.release',changed)
