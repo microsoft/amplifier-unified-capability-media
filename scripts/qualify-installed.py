@@ -1,6 +1,7 @@
 """Seal and exercise media from independent installed consumers, never edit peers."""
 import argparse, hashlib, json, os, re, shutil, subprocess, sys, zipfile
 from pathlib import Path
+from qualification_consumer import prepare_consumer, install_archive
 parser=argparse.ArgumentParser();parser.add_argument('--output',required=True);parser.add_argument('--python',required=True);parser.add_argument('--peer-handoff');args=parser.parse_args()
 source=Path(__file__).resolve().parents[1];out=Path(args.output).resolve();out.mkdir(parents=True,exist_ok=True)
 env={k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','PYTHONHOME'}};env['PYTHONDONTWRITEBYTECODE']='1'
@@ -9,6 +10,7 @@ def run(command,cwd,log):
     (out/log).write_text(result.stdout)
     if result.returncode:raise RuntimeError(f'{log}: exit {result.returncode}')
     return result.stdout
+consumer=prepare_consumer(out)
 peer=None
 if args.peer_handoff:
     packet=Path(args.peer_handoff).resolve();peer=json.loads(packet.read_text());native=peer['native']['nativeWheel'];nativeWheel=Path(native['path']);assert hashlib.sha256(nativeWheel.read_bytes()).hexdigest()==native['sha256']
@@ -20,8 +22,7 @@ if args.peer_handoff:
 run(['npm','pack','--json','--pack-destination',str(out)],source,'pack.log')
 archive=out/json.loads((out/'pack.log').read_text())[0]['filename']
 run(['uv','build','--wheel','--out-dir',str(out)],source,'wheel-build.log');wheel=next(out.glob('*.whl'))
-consumer=out/'consumer';consumer.mkdir(exist_ok=True)
-run(['npm','install','--ignore-scripts','--offline','--no-audit','--no-fund',str(archive)],consumer,'install-node.log')
+install_archive(out,consumer,archive,run)
 package=consumer/'node_modules/@amplifier/unified-media-capability';tests=consumer/'test';tests.mkdir(exist_ok=True)
 for file in (source/'test').iterdir():
     if file.suffix=='.mjs':
