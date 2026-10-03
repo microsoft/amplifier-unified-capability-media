@@ -73,7 +73,7 @@ These restate existing interface ownership rather than granting new permissions:
 checks each passed 50 Node / 32 Python with supplied native peers and no skips.
 Hosted Node 22/24 each passed 48 with two explicit missing-native-peer skips;
 Python passed 32. These counts refer to those exact runs, not this documentation
-successor or universal compatibility. [The independent qualification script](https://github.com/microsoft/amplifier-unified-capability-media/blob/68674d50396c719dd49e29491a3fbfb1c6e2962f/scripts/qualify-installed.py)
+successor or universal compatibility. [The independent qualification script](https://github.com/microsoft/amplifier-unified-capability-media/blob/d35d5ec/scripts/qualify-installed.py)
 produces owned archive/byte-equality receipts; do not relabel old artifacts with a
 new documentation revision. The existing [qualification snapshot](https://github.com/microsoft/amplifier-unified-capability-media/blob/68674d50396c719dd49e29491a3fbfb1c6e2962f/QUALIFICATION.json)
 retains its earlier 2026-10-02 revision and is not current complete acceptance.
