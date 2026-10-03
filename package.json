@@ -9,7 +9,11 @@
     "python/amplifier_unified_media/*.json",
     "pyproject.toml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "VISION.md",
+    "AGENTS.md",
+    "contracts/media.v1.md",
+    "docs/media-owner-acceptance.md"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs"

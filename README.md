@@ -1,5 +1,9 @@
 # Amplifier Unified media capability
 
+Start with the [local vision](VISION.md), [versioned media contract](contracts/media.v1.md)
+and [agent entry point](AGENTS.md). The [acceptance note](docs/media-owner-acceptance.md)
+keeps exact implementation evidence separate from desired behavior and remaining gaps.
+
 Independent media owner for the Unified host. It does not import the host, Core,
 Foundation, AppService, or client source. Browser audio goes directly over WebRTC;
 only scoped signalling crosses the authenticated HTTP media plane. The optional
