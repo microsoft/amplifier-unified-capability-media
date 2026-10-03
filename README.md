@@ -67,3 +67,50 @@ lists microsoft/amplifier-voice and robotdad/amplifier-app-voice / provider-open
 realtime; these separate products are not configured runtime dependencies here.
 OpenAI protocol checked against the official server-side-controls documentation:
 https://developers.openai.com/api/docs/guides/voice-server-controls
+
+## Held quiescence participant
+
+`createMediaCapability` returns `quiescenceParticipant(ownerId = 'media')` and
+`inspectQuiescence()`. Register the actual participant with the host for the voice
+capability, media HTTP ingress, and capture/transcript callbacks. The returned
+`quiescenceAccess` declares only `voice.configuration` as read-only. The optional
+`onMayBeIdle()` callback is a coalesced advisory completion signal; it is never
+idle proof and notification failures cannot change an effect result.
+
+`acquire({fenceId, commandId, purpose, instanceId, dataScope})` returns a held lease
+or `null` for known busy/uncovered work. Purpose is `recovery` or
+`distribution-update`. The owner atomically closes intake in a private durable
+SQLite fence, then acquires the existing Python worker's private gate. It never
+starts a worker to demonstrate idleness. A separate SQLite lifetime lease excludes
+another owner before the journals are opened; the operating system releases that
+lease after process death. The durable fence becomes `unknown` on restart.
+
+The gate accounts for complete HTTP/device/configuration effects, delegated host
+callbacks, pending transcript deliveries and drains, pending capture requests,
+live provider calls, and Python tasks/transport callbacks that continue after
+hangup. Attached viewers and idle screen grants are not work. Immutable saved
+frames, configuration, receipts, and selected status remain readable. The private
+worker's recent release cache is bounded to 256; the Node owner retains the durable
+canonical receipt, and evicted worker receipts are never authority to replay work.
+
+The held lease's `release(outcome, proof)` and the participant's
+`reconcileRelease({...context, outcome, proof})` require exact host fence identity.
+`unknown` retains closed intake. A conclusively refused aggregate admission may
+release a still-held lease using `{kind:'admission-refused'}` and `unchanged`.
+Otherwise proof must be `{verified:true, fenceId, commandId, outcome,
+instanceId, dataScope, receiptId}`, with the unchanged prior instance or a verified
+replacement instance for `ready`. These are trusted supervisor callbacks, not
+browser-supplied assertions. Private RPC fence operations are not public media
+HTTP routes. No uncertain call or transcript is replayed.
+
+A lost provider-call acknowledgement or unconfirmed provider shutdown preserves an
+opaque call-lifetime marker across restart. Such a marker reports the explicit
+coverage gap `prior-provider-call-lifetime-unverified`, distinct from a historical
+unknown command receipt. The owner cannot prove an independent browser/provider
+call ended after losing its signalling process, so it refuses automatic quiescence
+until an external authoritative provider/client reconciliation is implemented.
+This release does not claim generic automatic updates across that unresolved case.
+
+Qualification uses the actual private Python worker and synthetic immutable PNG
+validation, plus provider fixtures and a SIGKILL/restart owner test. It does not
+establish physical microphone/screen or authenticated provider acceptance.

@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 /** A durable intent spool, never native history authority. Only unattempted
  * adjacent fragments coalesce. SQL indexes keep recovery scoped and bounded. */
 export class TranscriptQueue{
- constructor(path,{record,onRecorded=()=>{}}){this.record=record;this.onRecorded=onRecorded;this.running=new Map();this.timers=new Map();this.closed=false;this.db=new DatabaseSync(path);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+ constructor(path,{record,onRecorded=()=>{},admit=work=>work()}){this.admit=admit;this.record=record;this.onRecorded=onRecorded;this.running=new Map();this.timers=new Map();this.closed=false;this.db=new DatabaseSync(path);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
  CREATE TABLE IF NOT EXISTS intents(seq INTEGER PRIMARY KEY AUTOINCREMENT,session TEXT NOT NULL,call TEXT NOT NULL,item TEXT NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL,append INTEGER NOT NULL,command TEXT NOT NULL UNIQUE,status TEXT NOT NULL,attempted INTEGER NOT NULL DEFAULT 0,created TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS pending_session ON intents(session,status,seq);
  CREATE INDEX IF NOT EXISTS call_order ON intents(session,call,seq);
@@ -19,7 +19,9 @@ export class TranscriptQueue{
   if(!this.timers.has(entry.session)){const timer=setTimeout(()=>{this.timers.delete(entry.session);this.flush(entry.session).catch(()=>{});},100);timer.unref();this.timers.set(entry.session,timer);}
   return {durability:'pending',commandId:command};
  }
- async flush(session){if(this.closed)return;if(typeof session!=='string')throw Error('Transcript drain requires one explicit session.');if(this.running.has(session))return this.running.get(session);const work=this.drain(session);this.running.set(session,work);try{return await work}finally{this.running.delete(session)}}
+ pendingCount(){return Number(this.db.prepare("SELECT count(*) n FROM intents WHERE status='pending'").get().n);}
+ async flush(session){return this.admit(()=>this.flushSelected(session));}
+ async flushSelected(session){if(this.closed)return;if(typeof session!=='string')throw Error('Transcript drain requires one explicit session.');if(this.running.has(session))return this.running.get(session);const work=this.drain(session);this.running.set(session,work);try{return await work}finally{this.running.delete(session)}}
  async drain(session){let count=0;const busyCalls=new Set();while(count++<64&&!this.closed){
   // Older unknown or busy intents fence later fragments for the same call.
   const rows=this.db.prepare(`SELECT q.* FROM intents q WHERE q.session=? AND q.status='pending' AND q.call NOT IN(SELECT value FROM json_each(?)) AND NOT EXISTS(SELECT 1 FROM intents earlier WHERE earlier.session=q.session AND earlier.call=q.call AND earlier.seq<q.seq) ORDER BY q.seq LIMIT 1`).all(session,JSON.stringify([...busyCalls]));

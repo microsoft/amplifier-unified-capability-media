@@ -9,13 +9,15 @@ from .voice_visual_image import validate_png
 import base64
 
 class Rpc:
-    def __init__(self): self.pending={}; self.owners={}; self.tasks=set()
+    def __init__(self): self.pending={}; self.owners={}; self.tasks=set(); self.calls=set(); self.effects=0; self.fence=None; self.released={}
     def send(self, value): print(json.dumps(value, ensure_ascii=False), flush=True)
+    def may_be_idle(self):
+        self.send({'jsonrpc':'2.0','method':'quiescence/mayBeIdle','params':{}})
     async def callback(self, name, params):
         identity='media:'+uuid.uuid4().hex; future=asyncio.get_running_loop().create_future(); self.pending[identity]=future
         self.send({'jsonrpc':'2.0','id':identity,'method':name,'params':params})
         try: return await asyncio.wait_for(future, 650 if name=='delegate' else 30)
-        finally: self.pending.pop(identity,None)
+        finally: self.pending.pop(identity,None); self.may_be_idle()
     async def handle(self, message):
         identity=message.get('id')
         if 'method' not in message:
@@ -31,7 +33,46 @@ class Rpc:
             # Provider errors are already sanitized. Never return arbitrary HTTP payloads.
             text=str(error) if isinstance(error,(VoiceError,ValueError)) else 'Media transport failed; the outcome may be unknown.'
             self.send({'jsonrpc':'2.0','id':identity,'error':{'code':-32000,'message':text[:500]}})
+    def work(self):
+        self.calls={call for call in self.calls if not call.closed or any(not task.done() for task in call.tasks) or any(task and not task.done() for task in (call.pump,call.observer))}
+        return {'effects':self.effects,'owners':len(self.owners),'callbacks':len(self.pending),'callTasks':sum(sum(not task.done() for task in call.tasks) for call in self.calls),'liveCalls':sum(not call.closed for call in self.calls),'transportTasks':sum(sum(bool(task and not task.done()) for task in (call.pump,call.observer)) for call in self.calls)}
+    @staticmethod
+    def context(args):
+        value={key:args.get('context',{}).get(key) for key in ('fenceId','commandId','purpose','instanceId','dataScope')}
+        value['ownerId']=args.get('ownerId')
+        if any(not isinstance(v,str) or not 1<=len(v)<=200 or any(ord(c)<32 for c in v) for v in value.values()) or value['purpose'] not in ('distribution-update','recovery'):
+            raise ValueError('Bounded exact media fence context required')
+        return value
     async def dispatch(self, method, args):
+        if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work()}
+        if method=='quiescence.acquire':
+            context=self.context(args);owner=args['ownerId']
+            if self.fence:
+                if self.fence['ownerId']!=owner or any(self.fence[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')):raise ValueError('Different media worker fence held')
+                return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
+            if context['fenceId'] in self.released:raise ValueError('Released fence cannot reacquire')
+            work=self.work()
+            if any(work.values()):return {'held':False,'executed':False,'counts':work}
+            self.fence={**context,'ownerId':owner};return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
+        if method=='quiescence.release':
+            context=self.context(args);old=self.fence
+            if not old:
+                if self.released.get(context['fenceId'])==context:return {'released':True,'duplicate':True}
+                raise ValueError('Exact media worker fence required')
+            if old['ownerId']!=args['ownerId'] or any(old[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')):raise ValueError('Different media worker fence')
+            if args['outcome']=='unknown':return {'released':False,'intakeClosed':True}
+            proof=args.get('proof') or {};outcome=args['outcome']
+            refused=proof=={'kind':'admission-refused'} and outcome=='unchanged'
+            verified=proof.get('verified') is True and all(proof.get(key)==old[key] for key in ('fenceId','commandId','dataScope')) and proof.get('outcome')==outcome and outcome in ('ready','unchanged') and bool(proof.get('receiptId')) and bool(proof.get('instanceId')) and ((proof['instanceId']==old['instanceId'])==(outcome=='unchanged'))
+            if not refused and not verified:raise ValueError('Exact verified media worker release proof required')
+            self.released[context['fenceId']]=context
+            while len(self.released)>256:self.released.pop(next(iter(self.released)))
+            self.fence=None;return {'released':True}
+        if self.fence:raise ValueError('Media worker intake closed for quiescence; no new effect admitted')
+        self.effects+=1
+        try:return await self.execute(method,args)
+        finally:self.effects-=1; self.may_be_idle()
+    async def execute(self, method, args):
         lease=args.get('lease')
         if method in ('native.status','native.capture'):
             from .native_foreground import NativeForeground, observation_metadata
@@ -56,7 +97,7 @@ class Rpc:
                 provider=args.get('provider','auto'); settings=args.get('settings',{})
                 if provider=='auto': provider=next((key for key,model in MODELS.items() if model==settings.get('preferredModel',MODELS['live'])),None)
                 if provider not in MODELS: raise VoiceError('The configured voice model is unsupported.')
-                call=owner.call=VoiceCall(owner,owner.session)
+                call=owner.call=VoiceCall(owner,owner.session);self.calls.add(call)
                 call.voice_name=selected_voice(MODELS[provider],settings.get('voice','marin')); call.interruptions=settings.get('interruptions',True)
                 result=await call.create(sdp,provider)
                 await owner.set_voice_status({'status':'connecting',**{k:v for k,v in result.items() if k!='sdp'}})
@@ -101,6 +142,7 @@ class Owner:
     async def record_voice_transcript(self,role,text,**args): return await self.callback('transcript',role=role,text=text,callId=args['voice_id'],itemId=args['item_id'],append=args.get('append',False))
     async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed',**_): return await self.callback('usage',callId=call_id,responseId=response_id,model=model,usage=usage,phase=phase)
     async def set_voice_status(self,status): return await self.callback('status',status=status)
+    def work_changed(self): self.rpc.may_be_idle()
     def subscribe(self): return self.queue
     def unsubscribe(self,queue): pass
     async def request(self,method,path,**kwargs):

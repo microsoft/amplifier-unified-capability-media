@@ -151,6 +151,8 @@ class VoiceCall:
         self.tasks.add(task)
         def finished(done: asyncio.Task) -> None:
             self.tasks.discard(done)
+            changed=getattr(self.owner,'work_changed',None)
+            if changed:changed()
             if not done.cancelled():
                 done.exception()  # Retrieve failures after a transport closes mid-send.
         task.add_done_callback(finished)

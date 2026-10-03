@@ -2,6 +2,7 @@ import {randomUUID,randomBytes,createHash} from 'node:crypto';
 import {mkdir,readFile,writeFile,rename,chmod} from 'node:fs/promises';
 import {Readable} from 'node:stream';
 import {join} from 'node:path';
+import {MediaQuiescence} from './quiescence.js';
 import {TranscriptQueue} from './transcripts.js';
 import {createPythonWorker} from './worker.js';
 export {createPythonWorker} from './worker.js';
@@ -10,23 +11,26 @@ const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('h
 const fail=(message,status=409)=>Object.assign(Error(message),{status});
 const cleanSession=value=>{if(typeof value!=='string'||!value.startsWith('ahp-session:'))throw fail('An explicit AHP conversation is required.',400);return value};
 function bounded(context={}){return {title:String(context.title||'').slice(0,300),activity:context.activity||{},screen_source:context.screen_source||{available:false},workers:(context.workers||[]).slice(0,20),messages:(context.messages||[]).slice(-12).map(row=>({role:row.role,text:String(row.text||'').slice(0,1000),via:row.via})),generations:(context.generations||[]).slice(-8)};}
-export async function createMediaCapability({directory,inspectSession,delegate,recordTranscript,recordUsage=async()=>{},subscribeSession,resolveCredential=async()=>'',settings=async()=>({}),configure,clientPresent=async()=>true,invokeClientTool,nativeStatus,nativeCapture,enableNative=false,recordCapture=async()=>({}),onChanged=()=>{},workerFactory=createPythonWorker,python,leaseMs=TTL}={}){
+export async function createMediaCapability({directory,inspectSession,delegate,recordTranscript,recordUsage=async()=>{},subscribeSession,resolveCredential=async()=>'',settings=async()=>({}),configure,clientPresent=async()=>true,invokeClientTool,nativeStatus,nativeCapture,enableNative=false,recordCapture=async()=>({}),onChanged=()=>{},onMayBeIdle=()=>{},workerFactory=createPythonWorker,python,leaseMs=TTL}={}){
  if(!directory||!inspectSession||!delegate||!recordTranscript)throw Error('Media owner requires isolated storage and explicit session, delegate and durable transcript callbacks.');
  await mkdir(join(directory,'receipts'),{recursive:true,mode:0o700});await mkdir(join(directory,'frames'),{recursive:true,mode:0o700});
- const leases=new Map(),owners=new Map(),locks=new Map();let revision=1,worker,configuring=false,startingMedia=0;const hostInstanceId=randomUUID();
+ let idleNotice;const notifyIdle=()=>{if(idleNotice)return;idleNotice=setTimeout(()=>{idleNotice=undefined;try{Promise.resolve(onMayBeIdle()).catch(()=>{})}catch{}},0);idleNotice.unref();};
+ const leases=new Map(),owners=new Map(),locks=new Map();let revision=1,worker,configuring=false,startingMedia=0,closing=false;const hostInstanceId=randomUUID();
+ const quiescence=new MediaQuiescence(directory,()=>({counts:{closing:closing?1:0,activeCalls:[...leases.values()].filter(lease=>lease.voice.id&&!['ended','error'].includes(lease.voice.status)).length,captureRequests:[...leases.values()].reduce((sum,lease)=>sum+[...lease.requests.values()].filter(request=>request.outcome!=='completed'&&Date.now()-request.createdAt<=30000).length,0),pendingTranscripts:transcriptQueue.pendingCount(),transcriptDrains:transcriptQueue.running.size},gaps:[]}),()=>worker,notifyIdle);
+ const settleCall=(lease,result)=>{if(lease.voice.id)quiescence.call(lease.id,result?.finalized===true?null:'unverified');};
  const persist=async(key,value)=>{const file=join(directory,'receipts',digest(key)+'.json'),tmp=file+'.'+randomUUID();await writeFile(tmp,JSON.stringify(value),{mode:0o600});await rename(tmp,file)};
  const load=async key=>{try{return JSON.parse(await readFile(join(directory,'receipts',digest(key)+'.json'),'utf8'))}catch(error){if(error.code==='ENOENT')return null;throw error}};
- const changed=session=>{revision++;onChanged('voice',session)};const transcriptQueue=new TranscriptQueue(join(directory,'transcript-intents.sqlite'),{record:recordTranscript,onRecorded:changed});await chmod(join(directory,'transcript-intents.sqlite'),0o600);const flushTranscripts=session=>transcriptQueue.flush(session);
+ const changed=session=>{revision++;onChanged('voice',session)};const transcriptQueue=new TranscriptQueue(join(directory,'transcript-intents.sqlite'),{record:recordTranscript,onRecorded:changed,admit:work=>quiescence.effect(work)});await chmod(join(directory,'transcript-intents.sqlite'),0o600);const flushTranscripts=session=>transcriptQueue.flush(session);
  const valid=async(lease,{cleanup=false}={})=>{if(!lease||(!cleanup&&(lease.expiresAt<Date.now()||!await clientPresent(lease.session,lease.clientId))))throw fail('Media permission expired or this client detached. Choose the source again.');return lease};
  const callbackLease=async args=>{const lease=leases.get(args.lease);await valid(lease,{cleanup:['status','usage'].includes(args.operation)});if(lease.session!==args.session||lease.clientId!==args.clientId)throw fail('Media scope mismatch.',403);return lease};
- const ensureWorker=()=>worker??=workerFactory({python,callbacks:{
+ const ensureWorker=()=>worker??=workerFactory({python,onMayBeIdle:notifyIdle,callbacks:Object.fromEntries(Object.entries({
   admit:async args=>{await callbackLease(args);await inspectSession(args.session);return {admitted:true}},
   inspect:async args=>{const lease=await callbackLease(args);return bounded(await inspectSession(lease.session))},
   delegate:async args=>{const lease=await callbackLease(args);return effect(lease,args.commandId,'delegate',args.text,async()=>{const frame=lease.nextFrame;lease.nextFrame=null;return delegate({session:lease.session,clientId:lease.clientId,commandId:args.commandId,text:args.text,attachments:frame&&Date.now()/1000-frame.capturedAt<=30?await frameAttachment(frame):undefined})},true)},
   transcript:async args=>{const lease=await callbackLease(args);return transcriptQueue.enqueue({session:lease.session,callId:args.callId,itemId:args.itemId,role:args.role,text:args.text,append:!!args.append,commandId:`media-transcript:${lease.id}:${++lease.transcriptSequence}`})},
   usage:async args=>{const lease=await callbackLease({...args,operation:'usage'});return recordUsage({...args,session:lease.session})},
-  status:async args=>{const lease=await callbackLease({...args,operation:'status'});lease.voice={...lease.voice,...args.status};return {}},
- }});
+  status:async args=>{const lease=await callbackLease({...args,operation:'status'});lease.voice={...lease.voice,...args.status};if(args.status.status==='ended')settleCall(lease,args.status);return {}},
+ }).map(([name,callback])=>[name,args=>name==='inspect'?callback(args):quiescence.effect(()=>callback(args))]))});
  async function effect(lease,id,operation,payload,run,saveResult=false){
   if(typeof id!=='string'||id.length>240)throw fail('A bounded durable commandId is required.',400);
   const key=[lease.account,lease.clientId,lease.session,id],fingerprint=digest([operation,payload]);
@@ -40,7 +44,8 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
  async function configuration(session){const preference=await settings(session);return {available:!!await resolveCredential(session),source:preference.source||'environment',preferredModel:preference.preferredModel||'gpt-live-1',voice:preference.voice||'marin',interruptions:preference.interruptions!==false,reason:null,mediaEndpoint:'/media',captureMode:'explicit-frame'};}
  const manifest={version:1,topics:{voice:{version:1,uri:'amplifier-media://configuration',watch:true}},actions:Object.fromEntries(['media.attach','voice.configuration'].map(name=>[name,{version:1,topic:'voice',operation:name,method:METHOD}]))};
  async function read(request){const url=new URL(typeof request==='string'?request:request.uri),scope=url.searchParams.get('scope')||'host';return {topic:'voice',scope,revision,data:{voiceConfiguration:await configuration(scope==='host'?null:scope),...(scope!=='host'?{voiceTranscripts:{sessionId:scope,items:transcriptQueue.history(scope)}}:{})}};}
- async function action(request,context={}){
+ const action=(request,context={})=>request.operation==='voice.configuration'?performAction(request,context):quiescence.effect(()=>performAction(request,context));
+ async function performAction(request,context={}){
   const session=cleanSession(request.channel),clientId=context.clientId,account=context.account;
   if(!clientId||!account)throw fail('Authenticated client and account are required.',401);
   if(request.operation==='voice.configuration')return {accepted:true,result:await configuration(session)};
@@ -87,7 +92,11 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
   }
   throw fail('Unsupported visual operation.',400);
  }
- async function handleFetch(request,{account}={}){
+ async function handleFetch(request,context={}){
+  const path=new URL(request.url).pathname,passive=['/media/voice/config','/media/voice/status','/media/voice/visual/status','/media/computer/visual/status','/media/voice/visual/result','/media/computer/visual/result'].includes(path);
+  try{return await (passive?handleFetchInner(request,context):quiescence.effect(()=>handleFetchInner(request,context)))}catch(error){return Response.json({error:error.message,code:'media_error'},{status:error.status||502})}
+ }
+ async function handleFetchInner(request,{account}={}){
   try{
    const url=new URL(request.url);if(!url.pathname.startsWith('/media/'))return new Response('Not found',{status:404});
    if(request.method!=='POST')throw fail('Media operations require POST.',405);
@@ -104,18 +113,20 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
     if(configuring)throw fail('Voice settings are changing. Try again after they finish.');
     if(lease.voice.id&&!['ended','error'].includes(lease.voice.status))throw fail('This client already has an active call.');
     const operation=path.split('/')[1];startingMedia++;try{result=await effect(lease,args.commandId,operation,{...args,sdp:args.sdp?digest(args.sdp):undefined},async()=>{
-     const result=await ensureWorker().request(operation,{...args,lease:token,session:lease.session,clientId:lease.clientId,apiKey:await resolveCredential(lease.session),context:bounded(await inspectSession(lease.session)),settings:await configuration(lease.session),directory});
-     if(operation==='connect'){lease.voice={...result,sdp:undefined,status:'connecting'};lease.unsubscribe=await subscribeSession?.(lease.session,async context=>{await flushTranscripts(lease.session);await worker?.request('update',{lease:token,context:bounded(context)}).catch(()=>{});});}return result;
+     if(operation==='connect')quiescence.call(lease.id,'starting');
+     let result;try{result=await ensureWorker().request(operation,{...args,lease:token,session:lease.session,clientId:lease.clientId,apiKey:await resolveCredential(lease.session),context:bounded(await inspectSession(lease.session)),settings:await configuration(lease.session),directory});}catch(error){if(operation==='connect')quiescence.call(lease.id,'unverified');throw error;}
+     if(operation==='connect'){quiescence.call(lease.id,'active');lease.voice={...result,sdp:undefined,status:'connecting'};lease.unsubscribe=await subscribeSession?.(lease.session,async context=>quiescence.effect(async()=>{await flushTranscripts(lease.session);await worker?.request('update',{lease:token,context:bounded(context)}).catch(()=>{});}));}return result;
     });}finally{startingMedia--;}
    }else if(path==='voice/ready'){result=await ensureWorker().request('ready',{lease:token,id:args.id});lease.voice.status='connected';}
-   else if(path==='voice/end'){result=worker?await worker.request('end',{lease:token,id:args.id}):{closed:true,finalized:false,workContinues:true};lease.voice={...lease.voice,status:'ended'};lease.grants.delete('voice');lease.unsubscribe?.();lease.unsubscribe=null;}
+   else if(path==='voice/end'){result=worker?await worker.request('end',{lease:token,id:args.id}):{closed:true,finalized:false,workContinues:true};settleCall(lease,result);lease.voice={...lease.voice,status:'ended'};lease.grants.delete('voice');lease.unsubscribe?.();lease.unsubscribe=null;}
    else throw fail('Unknown media operation.',404);
    return Response.json(result,{headers:{'Cache-Control':'no-store'}});
   }catch(error){return Response.json({error:error.message,code:'media_error'},{status:error.status||502,headers:{'Cache-Control':'no-store'}})}
  }
- const timer=setInterval(()=>{for(const [token,lease]of leases)if(lease.expiresAt<Date.now()){lease.unsubscribe?.();lease.grants.clear();worker?.request('end',{lease:token,id:lease.voice.id}).catch(()=>{});leases.delete(token);for(const [key,value]of owners)if(value===lease)owners.delete(key);}},10000);timer.unref();
+ async function endLease(lease){if(worker&&lease.voice.id){try{settleCall(lease,await worker.request('end',{lease:lease.token,id:lease.voice.id}));}catch{quiescence.call(lease.id,'unverified');}}}
+ const timer=setInterval(()=>{void quiescence.effect(async()=>{for(const [token,lease]of leases)if(lease.expiresAt<Date.now()){lease.unsubscribe?.();lease.grants.clear();await endLease(lease);leases.delete(token);for(const [key,value]of owners)if(value===lease)owners.delete(key);}}).catch(()=>{});},10000);timer.unref();
  async function frameAttachment(frame){const bytes=await readFile(join(directory,'frames',frame.id+'.png'));return [{type:'embeddedResource',data:bytes.toString('base64'),contentType:'image/png',displayName:'Explicit screen snapshot'}];}
  const resourceProvider={scheme:'amplifier-media',async read(params){const url=new URL(params.uri),session=cleanSession(url.searchParams.get('session'));await inspectSession(session);const id=url.pathname.slice(1);if(url.hostname!=='frames'||!/^[-a-f0-9]{36}$/.test(id))throw fail('Unknown frame.');const row=JSON.parse(await readFile(join(directory,'frames',id+'.json'),'utf8'));if(row.session!==session||row.hash!==url.searchParams.get('sha256'))throw fail('Frame scope mismatch.',403);const bytes=await readFile(join(directory,'frames',id+'.png'));if(createHash('sha256').update(bytes).digest('hex')!==row.hash)throw fail('Frame content changed.');return {data:bytes.toString('base64'),encoding:'base64',contentType:'image/png'};}};
  async function handleMedia(req,res,context){const request=new Request(new URL(req.url,'http://media.local'),{method:req.method,headers:req.headers,body:['GET','HEAD'].includes(req.method)?undefined:Readable.toWeb(req),duplex:'half'});const response=await handleFetch(request,context);res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));}
- return {manifest,read,action,handleMedia,handleFetch,flushTranscripts,resourceProvider,async disconnect(clientId){for(const lease of leases.values())if(lease.clientId===clientId){lease.expiresAt=0;lease.grants.clear();lease.unsubscribe?.();if(worker)await worker.request('end',{lease:lease.token,id:lease.voice.id}).catch(()=>{});}},async close(){clearInterval(timer);for(const lease of leases.values()){lease.unsubscribe?.();if(worker)await worker.request('end',{lease:lease.token,id:lease.voice.id}).catch(()=>{});}await worker?.close();leases.clear();owners.clear();await transcriptQueue.close();},get activeCalls(){return [...leases.values()].filter(item=>item.voice.id&&!['ended','error'].includes(item.voice.status)).length}};
+ return {manifest,read,action,handleMedia,handleFetch,flushTranscripts,resourceProvider,quiescenceAccess:{'voice.configuration':'read'},quiescenceParticipant:ownerId=>quiescence.participant(ownerId),inspectQuiescence:()=>quiescence.inspect(),disconnect:clientId=>quiescence.effect(async()=>{for(const lease of leases.values())if(lease.clientId===clientId){lease.expiresAt=0;lease.grants.clear();lease.unsubscribe?.();await endLease(lease);}}),async close(){closing=true;clearInterval(timer);for(const lease of leases.values()){lease.unsubscribe?.();await endLease(lease);}await worker?.close();leases.clear();owners.clear();await transcriptQueue.close();if(idleNotice)clearTimeout(idleNotice);quiescence.close();},get activeCalls(){return [...leases.values()].filter(item=>item.voice.id&&!['ended','error'].includes(item.voice.status)).length}};
 }
