@@ -181,3 +181,30 @@ archives do not include it implicitly.
 perform automatic fallback. Saving that legacy field does not claim it does.
 Offline fixture and installed ACP qualification establish settings behavior, not
 real voice-account, microphone, speaker, or browser acceptance.
+
+## Persistent service stop and resume
+
+The trusted `quiescenceParticipant()` advertises `serviceStop: {version: 1}`.
+For `purpose: 'service-stop'`, the host supplies the normal fence context plus
+`serviceIdentity: {installationId, dataScope, ownerId, instanceId, releaseDigest}`.
+The owner copies and retains the complete identity with its durable intake fence;
+restarting a process does not open intake or replay work. The host authenticates
+platform evidence. This participant validates its exact binding, not a PID,
+caller-provided claim of idleness, or socket presence.
+
+A conclusive release needs `kind: 'service-lifecycle'`, the retained `expected`
+identity, the exact `observed` identity, and the ordinary verified fence receipt.
+`outcome: 'ready'` requires a distinct instance, `serviceOutcome: 'resumed'`,
+`resumeCommandId`, `exitReceiptId`, and `readyReceiptId`. `outcome: 'unchanged'`
+requires the same instance, `serviceOutcome: 'stop-refused'`, and
+`refusalReceiptId`. The two receipt sets cannot be mixed. A changed release
+identity, proof, or outcome refuses; exact completed retries are passive.
+Generic update/recovery evidence cannot release a service fence.
+
+`{kind: 'admission-refused'}` is restricted to the original live lease's partial
+acquisition rollback. It is not a restart reconciliation mechanism. An unknown
+outcome keeps intake closed, and passive inspection/receipt routes stay usable.
+No service stop, platform process signaling, authenticated supervisor, or remote
+provider safety is implemented by this participant itself.
+
+The Node owner is the durable authority. An already-started private Python worker must explicitly negotiate service-stop support before its gate is acquired. No worker is started just to prove idle. Release evidence is persisted before the worker call, including when its acknowledgement is lost. Active calls, detached delegation, transcript delivery, and uncertain provider lifetimes retain their existing busy/refusal behavior.

@@ -6,10 +6,11 @@ from .voice_diagnostics import VoiceDiagnostics
 from .voice_options import selected_voice, voices_for
 from .sample import render_sample
 from .voice_visual_image import validate_png
+from .service_lifecycle import service_identity, service_proof
 import base64
 
 class Rpc:
-    def __init__(self): self.pending={}; self.owners={}; self.tasks=set(); self.calls=set(); self.effects=0; self.fence=None; self.released={}
+    def __init__(self): self.pending={}; self.owners={}; self.tasks=set(); self.calls=set(); self.effects=0; self.fence=None; self.released={}; self.live_fence=None
     def send(self, value): print(json.dumps(value, ensure_ascii=False), flush=True)
     def may_be_idle(self):
         self.send({'jsonrpc':'2.0','method':'quiescence/mayBeIdle','params':{}})
@@ -40,34 +41,40 @@ class Rpc:
     def context(args):
         value={key:args.get('context',{}).get(key) for key in ('fenceId','commandId','purpose','instanceId','dataScope')}
         value['ownerId']=args.get('ownerId')
-        if any(not isinstance(v,str) or not 1<=len(v)<=200 or any(ord(c)<32 for c in v) for v in value.values()) or value['purpose'] not in ('distribution-update','recovery'):
+        if any(not isinstance(v,str) or not 1<=len(v)<=200 or any(ord(c)<32 for c in v) for v in value.values()) or value['purpose'] not in ('distribution-update','recovery','service-stop'):
             raise ValueError('Bounded exact media fence context required')
+        if value['purpose']=='service-stop':
+            value['serviceIdentity']=service_identity(args['context'].get('serviceIdentity'))
+            if any(value['serviceIdentity'][key]!=value[key] for key in ('instanceId','dataScope')):raise ValueError('Service identity differs from media worker fence')
         return value
     async def dispatch(self, method, args):
-        if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work()}
+        if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work(),'serviceStop':{'version':1}}
         if method=='quiescence.acquire':
             context=self.context(args);owner=args['ownerId']
             if self.fence:
-                if self.fence['ownerId']!=owner or any(self.fence[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')):raise ValueError('Different media worker fence held')
+                if self.fence['ownerId']!=owner or any(self.fence[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')) or self.fence.get('serviceIdentity')!=context.get('serviceIdentity'):raise ValueError('Different media worker fence held')
                 return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
             if context['fenceId'] in self.released:raise ValueError('Released fence cannot reacquire')
             work=self.work()
             if any(work.values()):return {'held':False,'executed':False,'counts':work}
-            self.fence={**context,'ownerId':owner};return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
+            self.fence={**context,'ownerId':owner};self.live_fence=context['fenceId'];return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
         if method=='quiescence.release':
             context=self.context(args);old=self.fence
             if not old:
                 if self.released.get(context['fenceId'])=={'context':context,'outcome':args['outcome'],'proof':args.get('proof')}:return {'released':True,'duplicate':True}
                 raise ValueError('Exact media worker fence required')
-            if old['ownerId']!=args['ownerId'] or any(old[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')):raise ValueError('Different media worker fence')
-            if args['outcome']=='unknown':return {'released':False,'intakeClosed':True}
+            if old['ownerId']!=args['ownerId'] or any(old[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')) or old.get('serviceIdentity')!=context.get('serviceIdentity'):raise ValueError('Different media worker fence')
+            if args['outcome']=='unknown':
+                self.live_fence=None
+                return {'released':False,'intakeClosed':True}
             proof=args.get('proof') or {};outcome=args['outcome']
-            refused=proof=={'kind':'admission-refused'} and outcome=='unchanged'
+            refused=proof=={'kind':'admission-refused'} and outcome=='unchanged' and (old['purpose']!='service-stop' or self.live_fence==old['fenceId'])
+            if old['purpose']=='service-stop' and not refused:proof=service_proof(proof,old,outcome)
             verified=proof.get('verified') is True and all(proof.get(key)==old[key] for key in ('fenceId','commandId','dataScope')) and proof.get('outcome')==outcome and outcome in ('ready','unchanged') and bool(proof.get('receiptId')) and bool(proof.get('instanceId')) and ((proof['instanceId']==old['instanceId'])==(outcome=='unchanged'))
             if not refused and not verified:raise ValueError('Exact verified media worker release proof required')
             self.released[context['fenceId']]={'context':context,'outcome':args['outcome'],'proof':args.get('proof')}
             while len(self.released)>256:self.released.pop(next(iter(self.released)))
-            self.fence=None;return {'released':True}
+            self.fence=None;self.live_fence=None;return {'released':True}
         if self.fence:raise ValueError('Media worker intake closed for quiescence; no new effect admitted')
         self.effects+=1
         try:return await self.execute(method,args)
