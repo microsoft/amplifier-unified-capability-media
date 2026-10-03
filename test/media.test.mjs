@@ -1,5 +1,32 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,readFile,readdir,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createMediaCapability} from '../src/index.js';
 const session='ahp-session:/one';
+test('passive voice projections need no credential grant and start no worker',async()=>{
+ let secrets=0;
+ const f=await fixture({settings:async()=>({available:false,credentialAccess:'disabled',configurable:false,reason:'Voice credentials are disabled by the launcher.'}),
+  resolveCredential:async()=>{secrets++;throw Error('Voice credentials require explicit trusted launcher enablement');}});
+ try{
+  const projection=(await f.provider.read({uri:'amplifier-media://configuration?scope=host'})).data.voiceConfiguration;
+  assert.equal(projection.available,false);assert.equal(projection.configurable,false);assert.equal(projection.credentialAccess,'disabled');
+  assert.match(projection.reason,/disabled/);
+  const result=await f.provider.action({channel:session,operation:'voice.configuration'},{clientId:'a',account:'user'});
+  assert.deepEqual(result.result,projection);
+  const lease=await f.attach();
+  assert.equal((await f.post(lease,'voice/config')).body.available,false);
+  assert.equal(secrets,0);assert.equal(f.calls.length,0);
+  assert.equal((await f.post(lease,'voice/connect',{commandId:'denied',sdp:'v=0'})).status,502);
+  assert.equal(secrets,1);assert.equal(f.calls.length,0);
+ }finally{await f.close();}
+});
+test('voice availability is sanitized owner metadata; unknown availability never probes a secret',async()=>{
+ for(const settings of [{},{available:false},{available:true,source:'native',credentialAccess:'enabled',apiKey:'must-not-project'}]){
+  const f=await fixture({settings:async()=>settings,resolveCredential:async()=>{throw Error('Passive secret read');}});
+  try{
+   const row=(await f.provider.read({uri:'amplifier-media://configuration?scope=host'})).data.voiceConfiguration;
+   assert.equal(row.available,settings.available===true);assert.equal(row.reason===null,settings.available===true);
+   assert.ok(!JSON.stringify(row).includes('must-not-project'));
+  }finally{await f.close();}
+ }
+});
 async function fixture(options={}){const directory=await mkdtemp(join(tmpdir(),'owned-media-')),calls=[];let callbacks;const provider=await createMediaCapability({directory,inspectSession:async()=>({title:'Selected',messages:[]}),delegate:async()=>({response:'done'}),recordTranscript:async()=>({recorded:true}),resolveCredential:async()=>'fixture-private-key',clientPresent:async()=>true,workerFactory:config=>{callbacks=config.callbacks;return {async request(method,args){calls.push([method,args]);if(method==='connect')return {id:'call-'+args.clientId,sessionId:args.session,sdp:'answer-sensitive',provider:'live'};if(method==='end')return {closed:true,finalized:true,workContinues:true};if(method==='image.validate'){if(args.image!=='fixture-png')throw Error('Invalid PNG');return {width:1,height:1}}return {ready:true}},close(){}}},...options});
 const attach=async(clientId='a',account='user',sid=session)=>(await provider.action({channel:sid,operation:'media.attach',commandId:'attach'},{clientId,account})).result.lease;
 const post=async(token,path,args={},account='user')=>{const response=await provider.handleFetch(new Request('http://fixture/media/'+path,{method:'POST',headers:{'X-Amplifier-Media-Lease':token},body:JSON.stringify(args)}),{account});return {status:response.status,body:await response.json()}};

@@ -7,6 +7,13 @@ Python worker preserves the existing GPT-Live and GPT-Realtime sideband protocol
 transcript deduplication, generation correlation and hangup-with-work-continuing
 semantics. It has no global app-state subscription.
 
+Passive configuration reads use sanitized `settings()` metadata:
+`available`, `reason`, `configurable`, and optional
+`credentialAccess: "enabled" | "disabled"`. Missing availability is reported
+as unavailable. These reads never call `resolveCredential` or start a worker;
+credential resolution belongs only to an explicit voice connection or preview.
+The settings owner must not include secrets in this public projection.
+
 `createMediaCapability` takes durable private `directory`, `inspectSession`,
 `delegate`, `recordTranscript`, and optional `recordUsage`, `subscribeSession`,
 `resolveCredential`, `settings`, `configure`, `recordCapture`, `clientPresent`,

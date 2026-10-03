@@ -41,7 +41,18 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
   })();locks.set(digest(key),{work,fingerprint});try{return await work}finally{locks.delete(digest(key))}
  }
  async function saveFrame(lease,item,value){const bytes=Buffer.from(value.image,'base64'),hash=createHash('sha256').update(bytes).digest('hex'),id=item.command.id,uri=`amplifier-media://frames/${id}?session=${encodeURIComponent(lease.session)}&sha256=${hash}`;const metadata={id,session:lease.session,clientId:lease.clientId,source:lease.grants.get(item.command.type.split('.')[0])?.source,capturedAt:value.capturedAt,hash,mimeType:'image/png',width:value.width,height:value.height,resourceUri:uri,untrustedData:true,...(value.window?{window:value.window}:{} )};await writeFile(join(directory,'frames',id+'.png'),bytes,{mode:0o600,flag:'wx'});await writeFile(join(directory,'frames',id+'.json'),JSON.stringify(metadata),{mode:0o600,flag:'wx'});await recordCapture(metadata);lease.nextFrame=metadata;return metadata;}
- async function configuration(session){const preference=await settings(session);return {available:!!await resolveCredential(session),source:preference.source||'environment',preferredModel:preference.preferredModel||'gpt-live-1',voice:preference.voice||'marin',interruptions:preference.interruptions!==false,reason:null,mediaEndpoint:'/media',captureMode:'explicit-frame'};}
+ async function configuration(session){
+  // A passive projection must never obtain credentials or require their grant.
+  // The credential owner supplies sanitized availability; secrets are resolved
+  // only when the client explicitly connects or requests a voice preview.
+  const preference=await settings(session),available=preference.available===true;
+  return {available,configurable:preference.configurable??typeof configure==='function',
+   credentialAccess:['enabled','disabled'].includes(preference.credentialAccess)?preference.credentialAccess:undefined,
+   source:preference.source||'environment',preferredModel:preference.preferredModel||'gpt-live-1',
+   voice:preference.voice||'marin',interruptions:preference.interruptions!==false,
+   reason:available?null:preference.reason||'Voice is not configured on this host.',
+   mediaEndpoint:'/media',captureMode:'explicit-frame'};
+ }
  const manifest={version:1,topics:{voice:{version:1,uri:'amplifier-media://configuration',watch:true}},actions:Object.fromEntries(['media.attach','voice.configuration'].map(name=>[name,{version:1,topic:'voice',operation:name,method:METHOD}]))};
  async function read(request){const url=new URL(typeof request==='string'?request:request.uri),scope=url.searchParams.get('scope')||'host';return {topic:'voice',scope,revision,data:{voiceConfiguration:await configuration(scope==='host'?null:scope),...(scope!=='host'?{voiceTranscripts:{sessionId:scope,items:transcriptQueue.history(scope)}}:{})}};}
  const action=(request,context={})=>request.operation==='voice.configuration'?performAction(request,context):quiescence.effect(()=>performAction(request,context));
