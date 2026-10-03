@@ -249,3 +249,55 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Live calls, transports and callbacks prevent acquisition. Pending/unknown transcript intents protect selected conversations; completed frames and transcripts are owned copies outside the execution allocation. A resident media worker must negotiate the distinct managed-files gate before acquisition.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+## Shutdown and client-source acceptance
+
+`disconnect(clientId)` revokes that client's grants and stops its media transport.
+Provider-final transcript, usage and status callbacks for its already admitted
+lease remain accepted during hangup; new delegated input still requires client
+presence. Confirmed hangup is not sent again by shutdown or a repeated public end request. Unknown provider
+lifetimes retain the existing explicit refusal marker.
+
+Revoking or replacing a visual grant invalidates its pending capture requests and
+its next-frame selection. A delegation rechecks the same unexpired originating
+grant after reading the immutable frame bytes. Retained artifacts stay available
+through their authorized resource boundary; revocation does not delete history.
+
+`close()` is idempotent and refuses new public effects and new worker input/read
+callbacks. Final transcript/status/usage delivery can settle. It waits for the
+complete admitted callback and private fence-transition lifetimes before closing
+the worker, journals or directory lease. A callback that continues working keeps
+shutdown pending; callers must await the complete callback lifetime rather than
+spawn unreported background effects. The process supervisor must acquire the
+actual configured quiescence participants before replacing a process.
+
+| Owner lifetime | Busy/unknown evidence | End or cancellation boundary |
+| --- | --- | --- |
+| Connect, preview, configuration, defaults | Complete HTTP/action callback, startup guard; durable connect marker | Await original result; uncertain provider call remains unverified |
+| Provider sideband, observer, background voice work | Python owners, call tasks, pump/observer and RPC callbacks | Hangup closes transport and observer; accepted delegation continues |
+| Host delegation, usage, session reads/updates | Complete Node callback promise; Python pending callback | Shutdown awaits admitted promise; no command replay |
+| Transcript native delivery | Durable indexed pending/unknown intent, active drain | Known `busy/retryable/executed:false` alone permits exact retry; unknown stays fenced |
+| Browser capture request | Client/session/grant-bound request with 30-second completion window | Revoke/replace/detach invalidates selection; no device state on disk |
+| In-flight visual/native callback or PNG validation | Complete Node effect; Python effect/helper subprocess | Revocation discards a late frame but does not hide running callback |
+| Native foreground helper | Bounded stdout, deadline and awaited child lifetime | Cancellation kills and reaps child before returning |
+| Private acquire/release | Held durable fence and in-flight transition | Shutdown awaits transition; exact proof/outcome needed for release |
+
+The optional installed acceptance tests use `MEDIA_NATIVE_PYTHON`,
+`MEDIA_NATIVE_ADMIN_MODULE` and `MEDIA_NATIVE_HOST_MODULE` pointing to sealed public
+native/host packages. The supplied peers run read-only with
+`PYTHONDONTWRITEBYTECODE=1`; all test native homes, application homes, provider
+fixtures and ports are owned temporary state. No model prompt is submitted.
+`native-transcript-acceptance.test.mjs` checks native canonical bytes and media
+selected projections after reconnect/restart, including final text after detach.
+The known-busy admission in that scenario is an explicit pre-effect fixture.
+
+Run `python scripts/qualify-installed.py --output <owned-output> --python python3`
+to pack and install this owner in separate Node/Python consumers, compare every
+packaged implementation file with source, and run the relocated suites. Missing
+native peers remain visible skips. `test_voice_defaults.py` exercises the actual
+worker's model selection with a no-network call fixture: future defaults apply,
+and a failed preferred model does not attempt automatic fallback.
+
+These checks do not qualify browser gestures, microphone/camera/speaker, native
+screen permission, real audio, provider accounts, OS service stop or deployed
+adoption. F02.04's browser/device boundary remains with the client owner.
