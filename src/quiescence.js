@@ -11,7 +11,7 @@ const blocked=()=>Object.assign(Error('Media owner intake is closed for quiescen
 /** Private durable owner gate. A separate lifetime lock excludes a second writer. */
 export class MediaQuiescence {
  constructor(directory,inspect,worker,onMayBeIdle=()=>{}){
-  this.inspectWork=inspect;this.worker=worker;this.onMayBeIdle=onMayBeIdle;this.active=0;this.transition=false;
+  this.inspectWork=inspect;this.worker=worker;this.onMayBeIdle=onMayBeIdle;this.active=0;this.transition=false;this.idleWaiters=new Set();
   this.lock=new DatabaseSync(join(directory,'media-owner-lock.sqlite'));try{this.lock.exec('PRAGMA busy_timeout=0; CREATE TABLE IF NOT EXISTS owner(id INTEGER); BEGIN EXCLUSIVE');}catch(error){this.lock.close();throw error;}
   this.db=new DatabaseSync(join(directory,'media-quiescence.sqlite'));this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
    CREATE TABLE IF NOT EXISTS fence(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);
@@ -24,7 +24,9 @@ export class MediaQuiescence {
  save(value){this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT OR REPLACE INTO fence VALUES(1,?)').run(JSON.stringify(value));this.db.prepare('INSERT OR REPLACE INTO receipts VALUES(?,?)').run(value.fenceId,JSON.stringify(value));this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}}
  call(id,state){if(state===null)this.db.prepare('DELETE FROM calls WHERE id=?').run(id);else this.db.prepare('INSERT OR REPLACE INTO calls VALUES(?,?)').run(id,state);}
  inspect(){const work=this.inspectWork(),unverifiedCalls=Number(this.db.prepare("SELECT count(*) n FROM calls WHERE state='unverified'").get().n);return {intakeClosed:!!this.current(),fence:this.current(),activeRequests:this.active,...work,unverifiedCalls,gaps:[...(work.gaps??[]),...(unverifiedCalls?['prior-provider-call-lifetime-unverified']:[])]};}
- async effect(work){if(this.current())throw blocked();this.active++;try{return await work()}finally{this.active--;this.onMayBeIdle();}}
+ async effect(work){if(this.current())throw blocked();this.active++;try{return await work()}finally{this.active--;this.wakeIdle();this.onMayBeIdle();}}
+ wakeIdle(){if(!this.active&&!this.transition){for(const resolve of this.idleWaiters)resolve();this.idleWaiters.clear();}}
+ async waitForIdle(){while(this.active||this.transition)await new Promise(resolve=>this.idleWaiters.add(resolve));}
  participant(ownerId='media'){
   token(ownerId,'owner identity');
   const release=async(context,outcome,proof,live=false)=>this.release(ownerId,context,outcome,proof,live);
@@ -41,7 +43,7 @@ export class MediaQuiescence {
    try{
     const worker=this.worker();if(worker){if(value.purpose==='managed-files-disposal'){const hello=await worker.request('quiescence.inspect',{});if(hello.managedFiles?.version!==1){this.clear({...value,state:'refused'});return null;}}if(value.purpose==='service-stop'){const hello=await worker.request('quiescence.inspect',{});if(hello.serviceStop?.version!==1){this.clear({...value,state:'refused'});return null;}}const native=await worker.request('quiescence.acquire',{ownerId,context:value});if(native.held===false&&native.executed===false){this.clear({...value,state:'refused'});return null;}if(native.held!==true||native.fenceId!==value.fenceId||native.ownerId!==ownerId)throw Error('Media worker held proof unavailable');}
     value.state='held';this.save(value);this.liveFence=value.fenceId;return {ownerId,fenceId:value.fenceId,release:(outcome,proof)=>release(value,outcome,proof,true)};
-   }catch(error){value.state='unknown';this.save(value);throw error;}finally{this.transition=false;}
+   }catch(error){value.state='unknown';this.save(value);throw error;}finally{this.transition=false;this.wakeIdle();}
   },reconcileRelease:async context=>release(context,context.outcome,context.proof)},args=>{const empty=emptyRetention(args.context,args,this.current());return this.retentionReferences?.(args.sessions)??empty;}),args=>{emptyManaged(args.context,args,this.current());return this.managedReferences(args);});
  }
  clear(value){this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT OR REPLACE INTO receipts VALUES(?,?)').run(value.fenceId,JSON.stringify(value));this.db.prepare('DELETE FROM fence WHERE id=1').run();this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}}
@@ -57,7 +59,7 @@ export class MediaQuiescence {
   const signature=releaseSignature(outcome,proof);if(old.releaseSignature&&old.releaseSignature!==signature)throw Error('Exact retained media release proof required');
   old.releaseSignature=signature;this.save(old);this.transition=true;
   try{const worker=this.worker();if(worker){const result=await worker.request('quiescence.release',{ownerId,context:old,outcome,proof});if(result.released!==true)throw Error('Media worker release remains unconfirmed');}this.clear({...old,state:'released',outcome,releaseSignature:releaseSignature(outcome,proof)});this.liveFence=undefined;}
-  catch(error){old.state='unknown';this.save(old);throw error;}finally{this.transition=false;}
+  catch(error){old.state='unknown';this.save(old);throw error;}finally{this.transition=false;this.wakeIdle();}
  }
  close(){this.db.close();this.lock.exec('ROLLBACK');this.lock.close();}
 }
