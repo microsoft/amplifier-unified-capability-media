@@ -128,3 +128,56 @@ or restart, only the identical context, outcome and proof are accepted; changing
 the receipt identity, authority scope or outcome is rejected. JSON object key
 order is irrelevant. Older released receipts without exact proof evidence are
 not inferred or rewritten into verified release evidence.
+
+## Shared voice defaults
+
+The optional `voicePreferences(operation, args, context)` callback enables one
+host-scoped `voice-preferences` topic (`amplifier-media://voice-preferences`) and
+two ordinary capability actions. The topic's data is
+`{voicePreferences: {preferredModel, fallbackModel, voice, interruptions,
+preferencesRevision, preferenceFields, models, fallbackBehavior}}`. Model metadata
+and voice choices are explicitly bounded and sanitized. Existing `voiceConfiguration`
+reads also retain these fields; the host topic is the live shared-defaults watch
+so a change does not require enumerating or hydrating session state.
+
+```js
+voicePreferences: (operation, args) => nativeAdmin.perform(
+  operation, args, {clientId: ''} // trusted host/default workspace resolver
+)
+```
+
+The configured native launcher must independently enable `adminVoicePreferences`.
+Without a callback, this owner advertises no preference action and exposes no
+writable fields. Disabled credential access is compatible with non-secret shared
+defaults. The credential-only `configure` callback and `/media/voice/configure`
+route are unchanged; credential values never enter this topic or command journal.
+
+`voice.preferences.update` uses channel `ahp-root://`, topic `voice-preferences`,
+args `{expectedRevision, patch}`, and the ordinary outer `commandId`. It forwards
+that exact command ID to native. Draft typing is entirely client-local. The result
+contains the exact native-style receipt. Known native `executed:false` refusals,
+including stale revisions, return `accepted:false`; unknown outcomes remain
+unknown and are never repeated. A complete callback lifetime is counted by media
+quiescence. Updates use the existing atomic exclusion of active calls, previews,
+concurrent startup and credential changes, and apply only to later calls.
+
+`voice.preferences.receipt {commandId}` is an explicitly declared passive read
+usable under a held fence. The durable local intent index binds the original
+command to its authenticated account, allowing recovery from another client or
+owner restart without exposing other accounts' native receipts. An uncertain
+command is inspected through the native owner's exact receipt only; an inspection
+never replays it or rewrites product data during quiescence. A repeated update ID
+cannot perform a second write. Authenticated agent calls retain their own origin
+and need not borrow a browser client identity.
+
+Only confirmed saves invalidate `voice-preferences` at `host` scope. The compositor
+must forward that callback to the generic host and register this media participant
+plus the independently held native-admin participant. Neither participant replaces
+the other's complete lifetime proof. Local receipts live in
+`voice-preferences.sqlite`, an independent product store; current selected-native
+archives do not include it implicitly.
+
+`fallbackBehavior: "stored-only"` is intentional: the retained transport does not
+perform automatic fallback. Saving that legacy field does not claim it does.
+Offline fixture and installed ACP qualification establish settings behavior, not
+real voice-account, microphone, speaker, or browser acceptance.

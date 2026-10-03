@@ -3,6 +3,7 @@ import {mkdir,readFile,writeFile,rename,chmod} from 'node:fs/promises';
 import {Readable} from 'node:stream';
 import {join} from 'node:path';
 import {MediaQuiescence} from './quiescence.js';
+import {VoicePreferences,projectPreferences,schemas as preferenceSchemas} from './preferences.js';
 import {TranscriptQueue} from './transcripts.js';
 import {createPythonWorker} from './worker.js';
 export {createPythonWorker} from './worker.js';
@@ -11,12 +12,17 @@ const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('h
 const fail=(message,status=409)=>Object.assign(Error(message),{status});
 const cleanSession=value=>{if(typeof value!=='string'||!value.startsWith('ahp-session:'))throw fail('An explicit AHP conversation is required.',400);return value};
 function bounded(context={}){return {title:String(context.title||'').slice(0,300),activity:context.activity||{},screen_source:context.screen_source||{available:false},workers:(context.workers||[]).slice(0,20),messages:(context.messages||[]).slice(-12).map(row=>({role:row.role,text:String(row.text||'').slice(0,1000),via:row.via})),generations:(context.generations||[]).slice(-8)};}
-export async function createMediaCapability({directory,inspectSession,delegate,recordTranscript,recordUsage=async()=>{},subscribeSession,resolveCredential=async()=>'',settings=async()=>({}),configure,clientPresent=async()=>true,invokeClientTool,nativeStatus,nativeCapture,enableNative=false,recordCapture=async()=>({}),onChanged=()=>{},onMayBeIdle=()=>{},workerFactory=createPythonWorker,python,leaseMs=TTL}={}){
+export async function createMediaCapability({directory,inspectSession,delegate,recordTranscript,recordUsage=async()=>{},subscribeSession,resolveCredential=async()=>'',settings=async()=>({}),configure,voicePreferences,clientPresent=async()=>true,invokeClientTool,nativeStatus,nativeCapture,enableNative=false,recordCapture=async()=>({}),onChanged=()=>{},onMayBeIdle=()=>{},workerFactory=createPythonWorker,python,leaseMs=TTL}={}){
  if(!directory||!inspectSession||!delegate||!recordTranscript)throw Error('Media owner requires isolated storage and explicit session, delegate and durable transcript callbacks.');
  await mkdir(join(directory,'receipts'),{recursive:true,mode:0o700});await mkdir(join(directory,'frames'),{recursive:true,mode:0o700});
  let idleNotice;const notifyIdle=()=>{if(idleNotice)return;idleNotice=setTimeout(()=>{idleNotice=undefined;try{Promise.resolve(onMayBeIdle()).catch(()=>{})}catch{}},0);idleNotice.unref();};
  const leases=new Map(),owners=new Map(),locks=new Map();let revision=1,worker,configuring=false,startingMedia=0,closing=false;const hostInstanceId=randomUUID();
  const quiescence=new MediaQuiescence(directory,()=>({counts:{closing:closing?1:0,activeCalls:[...leases.values()].filter(lease=>lease.voice.id&&!['ended','error'].includes(lease.voice.status)).length,captureRequests:[...leases.values()].reduce((sum,lease)=>sum+[...lease.requests.values()].filter(request=>request.outcome!=='completed'&&Date.now()-request.createdAt<=30000).length,0),pendingTranscripts:transcriptQueue.pendingCount(),transcriptDrains:transcriptQueue.running.size},gaps:[]}),()=>worker,notifyIdle);
+ let preferences;try{preferences=voicePreferences?new VoicePreferences(directory,async(operation,args,context)=>{
+  if(operation==='voice.preferences.receipt')return voicePreferences(operation,args,context);
+  if(configuring||startingMedia||[...leases.values()].some(item=>item.voice.id&&!['ended','error'].includes(item.voice.status)))throw Object.assign(Error('End active calls and voice previews before changing shared voice defaults.'),{data:{executed:false,reason:'media-active'}});
+  configuring=true;try{return await voicePreferences(operation,args,context)}finally{configuring=false}
+ },()=>{revision++;onChanged('voice-preferences','host')}):undefined}catch(error){quiescence.close();throw error}
  const settleCall=(lease,result)=>{if(lease.voice.id)quiescence.call(lease.id,result?.finalized===true?null:'unverified');};
  const persist=async(key,value)=>{const file=join(directory,'receipts',digest(key)+'.json'),tmp=file+'.'+randomUUID();await writeFile(tmp,JSON.stringify(value),{mode:0o600});await rename(tmp,file)};
  const load=async key=>{try{return JSON.parse(await readFile(join(directory,'receipts',digest(key)+'.json'),'utf8'))}catch(error){if(error.code==='ENOENT')return null;throw error}};
@@ -45,18 +51,26 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
   // A passive projection must never obtain credentials or require their grant.
   // The credential owner supplies sanitized availability; secrets are resolved
   // only when the client explicitly connects or requests a voice preview.
-  const preference=await settings(session),available=preference.available===true;
-  return {available,configurable:preference.configurable??typeof configure==='function',
+  const preference=await settings(session),available=preference.available===true,projection=projectPreferences(preference,!!preferences);
+  return {...projection,available,configurable:typeof preference.configurable==='boolean'?preference.configurable:typeof configure==='function',
    credentialAccess:['enabled','disabled'].includes(preference.credentialAccess)?preference.credentialAccess:undefined,
-   source:preference.source||'environment',preferredModel:preference.preferredModel||'gpt-live-1',
-   voice:preference.voice||'marin',interruptions:preference.interruptions!==false,
-   reason:available?null:preference.reason||'Voice is not configured on this host.',
+   source:typeof preference.source==='string'&&preference.source.length<=200?preference.source:'environment',preferredModel:projection.preferredModel??'gpt-live-1',
+   voice:projection.voice??'marin',interruptions:projection.interruptions??true,
+   reason:available?null:typeof preference.reason==='string'&&preference.reason.length<=1000?preference.reason:'Voice is not configured on this host.',
    mediaEndpoint:'/media',captureMode:'explicit-frame'};
  }
  const manifest={version:1,topics:{voice:{version:1,uri:'amplifier-media://configuration',watch:true}},actions:Object.fromEntries(['media.attach','voice.configuration'].map(name=>[name,{version:1,topic:'voice',operation:name,method:METHOD}]))};
- async function read(request){const url=new URL(typeof request==='string'?request:request.uri),scope=url.searchParams.get('scope')||'host';return {topic:'voice',scope,revision,data:{voiceConfiguration:await configuration(scope==='host'?null:scope),...(scope!=='host'?{voiceTranscripts:{sessionId:scope,items:transcriptQueue.history(scope)}}:{})}};}
- const action=(request,context={})=>request.operation==='voice.configuration'?performAction(request,context):quiescence.effect(()=>performAction(request,context));
+ if(preferences){manifest.topics['voice-preferences']={version:1,uri:'amplifier-media://voice-preferences',watch:true,scope:'host'};for(const name of Object.keys(preferenceSchemas))manifest.actions[name]={version:1,topic:'voice-preferences',operation:name,method:METHOD};}
+ async function read(request){const url=new URL(typeof request==='string'?request:request.uri),scope=request.scope??url.searchParams.get('scope')??'host';if(url.protocol!=='amplifier-media:')throw fail('Unknown media topic',400);if(url.hostname==='voice-preferences'){if(!preferences||scope!=='host')throw fail('Shared voice preferences require the advertised host scope.',400);return {topic:'voice-preferences',scope:'host',revision,data:{voicePreferences:projectPreferences(await settings(null),true)}};}if(url.protocol!=='amplifier-media:'||url.hostname!=='configuration')throw fail('Unknown media topic',400);return {topic:'voice',scope,revision,data:{voiceConfiguration:await configuration(scope==='host'?null:scope),...(scope!=='host'?{voiceTranscripts:{sessionId:scope,items:transcriptQueue.history(scope)}}:{})}};}
+ const action=async(request,context={})=>{try{return await (['voice.configuration','voice.preferences.receipt'].includes(request.operation)?performAction(request,context):quiescence.effect(()=>performAction(request,context)))}catch(error){if(request.operation==='voice.preferences.update'&&error.executed===false)return {accepted:false,result:{commandId:request.commandId,operation:request.operation,status:'failed',executed:false,replayed:false,reason:'media-intake-fenced',error:error.message}};throw error}};
  async function performAction(request,context={}){
+  if(request.operation.startsWith('voice.preferences.')){
+   if(!preferences||request.channel!=='ahp-root://' ||request.topic!=='voice-preferences'||request.version!==1)throw fail('Advertised host-scoped voice preferences required.',400);
+   if(!context.account||(!context.clientId&&context.origin!=='agent'))throw fail('Authenticated caller required.',401);
+   if(request.operation==='voice.preferences.receipt')return preferences.receipt(request.args??{},context);
+   if(request.operation==='voice.preferences.update')return preferences.update(request,context);
+   throw fail('Unknown voice preference action.',400);
+  }
   const session=cleanSession(request.channel),clientId=context.clientId,account=context.account;
   if(!clientId||!account)throw fail('Authenticated client and account are required.',401);
   if(request.operation==='voice.configuration')return {accepted:true,result:await configuration(session)};
@@ -139,5 +153,5 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
  async function frameAttachment(frame){const bytes=await readFile(join(directory,'frames',frame.id+'.png'));return [{type:'embeddedResource',data:bytes.toString('base64'),contentType:'image/png',displayName:'Explicit screen snapshot'}];}
  const resourceProvider={scheme:'amplifier-media',async read(params){const url=new URL(params.uri),session=cleanSession(url.searchParams.get('session'));await inspectSession(session);const id=url.pathname.slice(1);if(url.hostname!=='frames'||!/^[-a-f0-9]{36}$/.test(id))throw fail('Unknown frame.');const row=JSON.parse(await readFile(join(directory,'frames',id+'.json'),'utf8'));if(row.session!==session||row.hash!==url.searchParams.get('sha256'))throw fail('Frame scope mismatch.',403);const bytes=await readFile(join(directory,'frames',id+'.png'));if(createHash('sha256').update(bytes).digest('hex')!==row.hash)throw fail('Frame content changed.');return {data:bytes.toString('base64'),encoding:'base64',contentType:'image/png'};}};
  async function handleMedia(req,res,context){const request=new Request(new URL(req.url,'http://media.local'),{method:req.method,headers:req.headers,body:['GET','HEAD'].includes(req.method)?undefined:Readable.toWeb(req),duplex:'half'});const response=await handleFetch(request,context);res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));}
- return {manifest,read,action,handleMedia,handleFetch,flushTranscripts,resourceProvider,quiescenceAccess:{'voice.configuration':'read'},quiescenceParticipant:ownerId=>quiescence.participant(ownerId),inspectQuiescence:()=>quiescence.inspect(),disconnect:clientId=>quiescence.effect(async()=>{for(const lease of leases.values())if(lease.clientId===clientId){lease.expiresAt=0;lease.grants.clear();lease.unsubscribe?.();await endLease(lease);}}),async close(){closing=true;clearInterval(timer);for(const lease of leases.values()){lease.unsubscribe?.();await endLease(lease);}await worker?.close();leases.clear();owners.clear();await transcriptQueue.close();if(idleNotice)clearTimeout(idleNotice);quiescence.close();},get activeCalls(){return [...leases.values()].filter(item=>item.voice.id&&!['ended','error'].includes(item.voice.status)).length}};
+ return {manifest,read,action,actionSchemas:preferences?preferenceSchemas:{},handleMedia,handleFetch,flushTranscripts,resourceProvider,quiescenceAccess:{'voice.configuration':'read',...(preferences?{'voice.preferences.receipt':'read'}:{})},quiescenceParticipant:ownerId=>quiescence.participant(ownerId),inspectQuiescence:()=>quiescence.inspect(),disconnect:clientId=>quiescence.effect(async()=>{for(const lease of leases.values())if(lease.clientId===clientId){lease.expiresAt=0;lease.grants.clear();lease.unsubscribe?.();await endLease(lease);}}),async close(){closing=true;clearInterval(timer);for(const lease of leases.values()){lease.unsubscribe?.();await endLease(lease);}await worker?.close();leases.clear();owners.clear();await transcriptQueue.close();await preferences?.close();if(idleNotice)clearTimeout(idleNotice);quiescence.close();},get activeCalls(){return [...leases.values()].filter(item=>item.voice.id&&!['ended','error'].includes(item.voice.status)).length}};
 }
