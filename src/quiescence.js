@@ -1,3 +1,4 @@
+import {managedParticipant,emptyManaged} from './managed-files.js';
 import {emptyRetention,retentionParticipant} from './retention.js';
 import {serviceIdentity,sameIdentity,validateServiceRelease} from './service-lifecycle.js';
 const canonicalProof=value=>Array.isArray(value)?value.map(canonicalProof):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalProof(value[key])])):value;
@@ -27,10 +28,10 @@ export class MediaQuiescence {
  participant(ownerId='media'){
   token(ownerId,'owner identity');
   const release=async(context,outcome,proof,live=false)=>this.release(ownerId,context,outcome,proof,live);
-  return retentionParticipant({id:ownerId,serviceStop:{version:1},acquire:async context=>{
+  return managedParticipant(retentionParticipant({id:ownerId,serviceStop:{version:1},acquire:async context=>{
    if(this.transition)throw Error('Media quiescence transition already running');
    const value=Object.fromEntries(['fenceId','commandId','purpose','instanceId','dataScope'].map(key=>[key,token(context[key],key)]));
-   if(!['distribution-update','recovery','service-stop','retention-hide'].includes(value.purpose))throw Error('Unsupported quiescence purpose');
+   if(!['distribution-update','recovery','service-stop','retention-hide','managed-files-disposal'].includes(value.purpose))throw Error('Unsupported quiescence purpose');
    if(value.purpose==='service-stop'){value.serviceIdentity=serviceIdentity(context.serviceIdentity);if(value.serviceIdentity.instanceId!==value.instanceId||value.serviceIdentity.dataScope!==value.dataScope)throw Error('Service identity differs from media fence');}
    value.ownerId=ownerId;value.state='checking';const old=this.current();
    if(old){if((!same(old,value)||old.ownerId!==ownerId))throw Error('Different media fence requires reconciliation');if(old.state!=='held')throw Error('Media fence is unknown; never reacquire');return {ownerId,fenceId:value.fenceId,release:(outcome,proof)=>release(value,outcome,proof,true)}}
@@ -38,10 +39,10 @@ export class MediaQuiescence {
    const work=this.inspect();if(work.activeRequests||work.gaps.length||Object.values(work.counts).some(value=>value>0))return null;
    this.transition=true;this.save(value);
    try{
-    const worker=this.worker();if(worker){if(value.purpose==='service-stop'){const hello=await worker.request('quiescence.inspect',{});if(hello.serviceStop?.version!==1){this.clear({...value,state:'refused'});return null;}}const native=await worker.request('quiescence.acquire',{ownerId,context:value});if(native.held===false&&native.executed===false){this.clear({...value,state:'refused'});return null;}if(native.held!==true||native.fenceId!==value.fenceId||native.ownerId!==ownerId)throw Error('Media worker held proof unavailable');}
+    const worker=this.worker();if(worker){if(value.purpose==='managed-files-disposal'){const hello=await worker.request('quiescence.inspect',{});if(hello.managedFiles?.version!==1){this.clear({...value,state:'refused'});return null;}}if(value.purpose==='service-stop'){const hello=await worker.request('quiescence.inspect',{});if(hello.serviceStop?.version!==1){this.clear({...value,state:'refused'});return null;}}const native=await worker.request('quiescence.acquire',{ownerId,context:value});if(native.held===false&&native.executed===false){this.clear({...value,state:'refused'});return null;}if(native.held!==true||native.fenceId!==value.fenceId||native.ownerId!==ownerId)throw Error('Media worker held proof unavailable');}
     value.state='held';this.save(value);this.liveFence=value.fenceId;return {ownerId,fenceId:value.fenceId,release:(outcome,proof)=>release(value,outcome,proof,true)};
    }catch(error){value.state='unknown';this.save(value);throw error;}finally{this.transition=false;}
-  },reconcileRelease:async context=>release(context,context.outcome,context.proof)},args=>{const empty=emptyRetention(args.context,args,this.current());return this.retentionReferences?.(args.sessions)??empty;});
+  },reconcileRelease:async context=>release(context,context.outcome,context.proof)},args=>{const empty=emptyRetention(args.context,args,this.current());return this.retentionReferences?.(args.sessions)??empty;}),args=>{emptyManaged(args.context,args,this.current());return this.managedReferences(args);});
  }
  clear(value){this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT OR REPLACE INTO receipts VALUES(?,?)').run(value.fenceId,JSON.stringify(value));this.db.prepare('DELETE FROM fence WHERE id=1').run();this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}}
  async release(ownerId,context,outcome,proof,live=false){

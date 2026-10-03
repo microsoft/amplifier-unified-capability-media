@@ -41,14 +41,14 @@ class Rpc:
     def context(args):
         value={key:args.get('context',{}).get(key) for key in ('fenceId','commandId','purpose','instanceId','dataScope')}
         value['ownerId']=args.get('ownerId')
-        if any(not isinstance(v,str) or not 1<=len(v)<=200 or any(ord(c)<32 for c in v) for v in value.values()) or value['purpose'] not in ('distribution-update','recovery','service-stop','retention-hide'):
+        if any(not isinstance(v,str) or not 1<=len(v)<=200 or any(ord(c)<32 for c in v) for v in value.values()) or value['purpose'] not in ('distribution-update','recovery','service-stop','retention-hide','managed-files-disposal'):
             raise ValueError('Bounded exact media fence context required')
         if value['purpose']=='service-stop':
             value['serviceIdentity']=service_identity(args['context'].get('serviceIdentity'))
             if any(value['serviceIdentity'][key]!=value[key] for key in ('instanceId','dataScope')):raise ValueError('Service identity differs from media worker fence')
         return value
     async def dispatch(self, method, args):
-        if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work(),'serviceStop':{'version':1}}
+        if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work(),'serviceStop':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True}}
         if method=='quiescence.acquire':
             context=self.context(args);owner=args['ownerId']
             if self.fence:
@@ -68,7 +68,7 @@ class Rpc:
                 self.live_fence=None
                 return {'released':False,'intakeClosed':True}
             proof=args.get('proof') or {};outcome=args['outcome']
-            refused=proof=={'kind':'admission-refused'} and outcome=='unchanged' and (old['purpose']!='service-stop' or self.live_fence==old['fenceId'])
+            refused=proof=={'kind':'admission-refused'} and outcome=='unchanged' and (old['purpose'] not in {'service-stop','managed-files-disposal'} or self.live_fence==old['fenceId'])
             if old['purpose']=='service-stop' and not refused:proof=service_proof(proof,old,outcome)
             verified=proof.get('verified') is True and all(proof.get(key)==old[key] for key in ('fenceId','commandId','dataScope')) and proof.get('outcome')==outcome and outcome in ('ready','unchanged') and bool(proof.get('receiptId')) and bool(proof.get('instanceId')) and ((proof['instanceId']==old['instanceId'])==(outcome=='unchanged'))
             if not refused and not verified:raise ValueError('Exact verified media worker release proof required')
