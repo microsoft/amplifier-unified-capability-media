@@ -36,6 +36,10 @@ bounded single-line `apiKey`; its response is a fresh sanitized projection. A
 failed projection read after saving leaves the save outcome unknown. Retained
 command identity, fingerprint and outcome are checked before fresh credential
 preflight; changed settings never reclassify an earlier effect or permit replay.
+One client lease admits only one call or preview startup at a time. An unconfirmed
+call lifetime remains retained after sideband failure or response loss; a fresh
+command cannot replace it. Only a confirmed provider end releases that lifetime.
+Proved provider refusal before identity still permits a later fresh command.
 
 `createMediaCapability` takes durable private `directory`, `inspectSession`,
 `delegate`, `recordTranscript`, and optional `recordUsage`, `subscribeSession`,

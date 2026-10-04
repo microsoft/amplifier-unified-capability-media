@@ -22,6 +22,7 @@ export class MediaQuiescence {
  }
  current(){const row=this.db.prepare('SELECT value FROM fence WHERE id=1').get();return row&&JSON.parse(row.value);}
  save(value){this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT OR REPLACE INTO fence VALUES(1,?)').run(JSON.stringify(value));this.db.prepare('INSERT OR REPLACE INTO receipts VALUES(?,?)').run(value.fenceId,JSON.stringify(value));this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}}
+ callState(id){return this.db.prepare('SELECT state FROM calls WHERE id=?').get(id)?.state;}
  call(id,state){if(state===null)this.db.prepare('DELETE FROM calls WHERE id=?').run(id);else this.db.prepare('INSERT OR REPLACE INTO calls VALUES(?,?)').run(id,state);}
  inspect(){const work=this.inspectWork(),unverifiedCalls=Number(this.db.prepare("SELECT count(*) n FROM calls WHERE state='unverified'").get().n);return {intakeClosed:!!this.current(),fence:this.current(),activeRequests:this.active,...work,unverifiedCalls,gaps:[...(work.gaps??[]),...(unverifiedCalls?['prior-provider-call-lifetime-unverified']:[])]};}
  async effect(work){if(this.current())throw blocked();this.active++;try{return await work()}finally{this.active--;this.wakeIdle();this.onMayBeIdle();}}

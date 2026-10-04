@@ -1,6 +1,8 @@
 // Public copy is fixed here; credentials, provider bodies and callback errors
 // never become user-facing diagnostic text.
 const messages={
+ voice_previous_call_unverified:[409,'The earlier call has not been confirmed ended. End it or contact the installation owner before calling again.'],
+ voice_start_busy:[409,'A call or preview is starting for this client. Wait for its result before starting another.'],
  voice_access_disabled:[403,'Voice access is turned off for this installation. Ask its owner to enable it.'],
  voice_credentials_missing:[409,'Add an OpenAI API key in Voice settings to start calls and previews.'],
  voice_unavailable:[503,'Voice is unavailable. Open Voice settings or contact the installation owner.'],
