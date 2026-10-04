@@ -147,6 +147,34 @@ replacement instance for `ready`. These are trusted supervisor callbacks, not
 browser-supplied assertions. Private RPC fence operations are not public media
 HTTP routes. No uncertain call or transcript is replayed.
 
+### Pre-retirement admission abort
+
+The participant's optional `abortAdmission({...context, proof})` follows the Host
+admission-abort contract. It accepts only an authenticated supervisor proof with
+exactly `{kind: "distribution-admission-abort", verified: true,
+purpose: "distribution-update", receiptId, commandId, fenceId, instanceId,
+dataScope}`. This distinct proof cannot be replaced by a generic release or an
+admission-refused assertion. It grants no stop, retirement, replay or disposal.
+
+New distribution acquisitions durably retain their exact attempt before worker
+dispatch, including a known busy refusal before returning `null`. An abort needs
+that retained attempt and complete idle work accounting. The durable owner receipt
+contains exactly `{ownerId, status: "released" | "not-acquired", receiptId,
+commandId, fenceId, instanceId, dataScope}`. Receipt persistence and held-row
+removal share one transaction; an identical proof retry returns the original
+receipt without repeating worker settlement or clearing a newer fence. Changed
+proofs, identities, pending work and unknown provider lifetimes refuse.
+
+If acquisition reached an existing worker, private
+`quiescence.abortAdmission` must return the exact original worker receipt before
+the Node authority clears. The worker's bounded attempt/receipt cache is
+process-local; the Node journal owns durability. Lost replies can be reconciled
+while that original worker retains its evidence. If it disappears after restart,
+or its evidence is evicted, abort remains unconfirmed; any existing outer hold
+stays closed. A worker is never started to manufacture non-acquisition proof. Legacy
+unknown fences without the new attempted-acquisition record stay unknown.
+Missing held rows and empty replacement-worker state are never proof.
+
 A lost provider-call acknowledgement or unconfirmed provider shutdown preserves an
 opaque call-lifetime marker across restart. Such a marker reports the explicit
 coverage gap `prior-provider-call-lifetime-unverified`, distinct from a historical

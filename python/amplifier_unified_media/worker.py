@@ -11,7 +11,7 @@ from .service_lifecycle import service_identity, service_proof
 import base64
 
 class Rpc:
-    def __init__(self): self.pending={}; self.owners={}; self.tasks=set(); self.calls=set(); self.effects=0; self.fence=None; self.released={}; self.live_fence=None
+    def __init__(self): self.pending={}; self.owners={}; self.tasks=set(); self.calls=set(); self.effects=0; self.fence=None; self.released={}; self.live_fence=None; self.admissions={}; self.aborted={}
     def send(self, value): print(json.dumps(value, ensure_ascii=False), flush=True)
     def may_be_idle(self):
         self.send({'jsonrpc':'2.0','method':'quiescence/mayBeIdle','params':{}})
@@ -55,16 +55,45 @@ class Rpc:
             files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.iterdir()) if p.is_file() and p.suffix in ('.py','.json')}
             loaded={name:Path(module.__file__).resolve() for name,module in list(sys.modules.items()) if getattr(module,'__file__',None) and (name.startswith('amplifier_unified_media') or (name=='__main__' and Path(module.__file__).resolve().parent==root))}
             return {'isolated':bool(sys.flags.isolated),'dontWriteBytecode':bool(sys.dont_write_bytecode),'packageFiles':files,'loadedModules':{name:{'file':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'withinPackage':p.parent==root} for name,p in sorted(loaded.items())}}
-        if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work(),'serviceStop':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True}}
+        if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work(),'serviceStop':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'admissionAbort':{'version':1}}
         if method=='quiescence.acquire':
             context=self.context(args);owner=args['ownerId']
             if self.fence:
                 if self.fence['ownerId']!=owner or any(self.fence[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')) or self.fence.get('serviceIdentity')!=context.get('serviceIdentity'):raise ValueError('Different media worker fence held')
                 return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
-            if context['fenceId'] in self.released:raise ValueError('Released fence cannot reacquire')
+            if context['fenceId'] in self.released or context['fenceId'] in self.aborted or context['fenceId'] in self.admissions:raise ValueError('Settled or refused fence cannot reacquire')
             work=self.work()
+            if context['purpose']=='distribution-update':
+                self.admissions[context['fenceId']]={'context':context,'status':'refused' if any(work.values()) else 'held'}
+                while len(self.admissions)>256:self.admissions.pop(next(iter(self.admissions)))
             if any(work.values()):return {'held':False,'executed':False,'counts':work}
             self.fence={**context,'ownerId':owner};self.live_fence=context['fenceId'];return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
+        if method=='quiescence.abortAdmission':
+            context=self.context(args);proof=args.get('proof');keys={'kind','verified','purpose','receiptId','commandId','fenceId','instanceId','dataScope'}
+            if (context['purpose']!='distribution-update' or not isinstance(proof,dict) or set(proof)!=keys
+                    or proof['kind']!='distribution-admission-abort' or proof['verified'] is not True or proof['purpose']!='distribution-update'
+                    or any(proof[key]!=context[key] for key in ('commandId','fenceId','instanceId','dataScope'))
+                    or not isinstance(proof['receiptId'],str) or not 1<=len(proof['receiptId'])<=200 or any(ord(c)<32 for c in proof['receiptId'])):
+                raise ValueError('Exact authenticated distribution admission abort proof required')
+            signature=json.dumps(proof,sort_keys=True,separators=(',',':'),allow_nan=False)
+            prior=self.aborted.get(context['fenceId'])
+            if prior:
+                if prior['context']!=context or prior['signature']!=signature:raise ValueError('Admission abort proof differs from retained proof')
+                return dict(prior['receipt'])
+            attempt=self.admissions.get(context['fenceId'])
+            if not attempt or attempt['context']!=context:raise ValueError('Original media worker admission attempt unavailable; absence is not proof')
+            if any(self.work().values()):raise ValueError('Media worker admission work remains pending')
+            if self.fence is not None:
+                if self.fence!=context:raise ValueError('Different media worker fence held')
+                status='released'
+            elif attempt['status']=='refused' and context['fenceId'] not in self.released:status='not-acquired'
+            else:raise ValueError('Original worker hold is no longer authoritatively accounted')
+            receipt={key:context[key] for key in ('ownerId','commandId','fenceId','instanceId','dataScope')}
+            receipt.update(status=status,receiptId='media-worker-admission-abort:'+hashlib.sha256(json.dumps([context,proof],sort_keys=True,separators=(',',':')).encode()).hexdigest())
+            self.aborted[context['fenceId']]={'context':context,'signature':signature,'receipt':receipt}
+            while len(self.aborted)>256:self.aborted.pop(next(iter(self.aborted)))
+            self.fence=None;self.live_fence=None
+            return dict(receipt)
         if method=='quiescence.release':
             context=self.context(args);old=self.fence
             if not old:
