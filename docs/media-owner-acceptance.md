@@ -36,3 +36,35 @@ Physical devices, authenticated audio/providers, browser gestures, external
 provider-lifetime reconciliation, process supervisor replacement and deployed
 adoption remain explicit unverified boundaries. Automatic fallback remains
 `stored-only`. There is no new camera, recording or device permission feature.
+
+## Call lifetime and offline voice parity successor
+
+The successor based on merged `8d85b1811a80480f25a997fbeea52614f87308af`
+repairs a falsifier of M3/M7: a fresh command on one lease could replace its
+unverified provider marker after unknown connect or sideband error. Concurrent
+startups could also both pass preflight before either received a provider identity.
+The per-lease reservation and retained-marker check refuse both before a new
+provider effect. Exact old command receipts still precede fresh preflight.
+
+[Lifetime tests](../test/voice-lifetime.test.mjs) cover both failures, concurrent
+startup, known provider refusal, maintenance exclusion and confirmed hangup.
+[Transport tests](../test/test_voice_transport.py) run actual RPC and VoiceCall
+code with only HTTP/WebSocket replaced offline: both protocols receive saved
+voices, future realtime calls receive changed interruption defaults, 404 does
+not cause fallback, and speech interruption/hangup preserve accepted delegation
+and final Unicode transcript callbacks. Live's interruption preference remains
+stored; its existing transport has no equivalent interruption field.
+
+The installed-native preservation fixture also copies its three retained voice
+rows through the actual host/native fork path, cold mounts the copied conversation
+through Core/Foundation, verifies exact voice metadata/text, preserves the source
+canonical bytes and forbids model completions. This does not qualify browser UI
+or physical audio. Independent package receipts name the exact peer versions.
+
+Affected-class inventory: both configured media protocols and the legacy Unified
+web VoiceManager use a single selected transport attempt. The retained module
+catalog also lists `microsoft/amplifier-voice` and
+`robotdad/amplifier-app-voice`; these are separate products, not configured
+dependencies. Their installed runtime behavior is outside this qualification.
+The guard belongs to this media owner's lease/maintenance storage, rather than
+those products or native session ownership. No automatic fallback is introduced.

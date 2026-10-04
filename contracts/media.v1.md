@@ -46,6 +46,14 @@ for their fields. Consumers must not infer an unadvertised extension from prose.
 
 ## Consumer obligations
 
+The call-lifetime successor maps its [overlap/error checks](../test/voice-lifetime.test.mjs)
+to M3/M7, its [actual offline transport checks](../test/test_voice_transport.py)
+to M5/M6, and its [installed-native copy/restart check](../test/native-transcript-acceptance.test.mjs)
+to M2. A client may receive a new typed 409 refusal while its earlier call lifetime
+is unverified or its startup is pending. Host/native protocols and canonical
+storage remain their owners. Exact installed evidence and limits are recorded
+separately; these checks do not retire F02.04 browser/audio acceptance.
+
 These restate existing interface ownership rather than granting new permissions:
 
 - Host/gateway: supply trusted account/client identity, authorize sessions/resources,
