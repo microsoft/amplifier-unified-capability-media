@@ -70,6 +70,10 @@ These restate existing interface ownership rather than granting new permissions:
   Await complete callback lifetime; detached background effects are not covered by
   an already-resolved promise. Authenticate exact release/service evidence. A
   media-only hold does not prove complete installation or backup coverage.
+  The distinct authenticated pre-retirement admission-abort callback additionally
+  requires the original attempted-acquisition record and exact owner receipt;
+  absent or replacement-worker state cannot establish non-acquisition. See the
+  [concrete adapter and crash boundary](../README.md#pre-retirement-admission-abort).
 - Release/integration owner: name exact source/package/peer revisions, archive
   hashes, skipped scenarios and loaded-worker evidence. Use CD impact review for
   changed meaning; unsupported client/device/provider work is not retired by omission.
