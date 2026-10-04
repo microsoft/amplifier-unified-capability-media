@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {MediaQuiescence} from './quiescence.js';
 import {VoicePreferences,projectPreferences,schemas as preferenceSchemas} from './preferences.js';
 import {TranscriptQueue} from './transcripts.js';
+import {validateMediaStore} from './store-startup.js';
 import {voiceFailure,voiceAvailability,availabilityReason,requireVoice,voiceErrorResponse} from './voice-errors.js';
 import {createPythonWorker} from './worker.js';
 export {createPythonWorker} from './worker.js';
@@ -18,7 +19,10 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
  await mkdir(join(directory,'receipts'),{recursive:true,mode:0o700});await mkdir(join(directory,'frames'),{recursive:true,mode:0o700});
  let idleNotice;const notifyIdle=()=>{if(idleNotice)return;idleNotice=setTimeout(()=>{idleNotice=undefined;try{Promise.resolve(onMayBeIdle()).catch(()=>{})}catch{}},0);idleNotice.unref();};
  const leases=new Map(),owners=new Map(),locks=new Map();let revision=1,worker,configuring=false,startingMedia=0,closing=false,closePromise;const hostInstanceId=randomUUID();
- const quiescence=new MediaQuiescence(directory,()=>({counts:{closing:closing?1:0,activeCalls:[...leases.values()].filter(lease=>lease.voice.id&&!['ended','error'].includes(lease.voice.status)).length,captureRequests:[...leases.values()].reduce((sum,lease)=>sum+[...lease.requests.values()].filter(request=>request.outcome!=='completed'&&Date.now()-request.createdAt<=30000).length,0),pendingTranscripts:transcriptQueue.pendingCount(),unknownTranscripts:transcriptQueue.unknownCount(),transcriptDrains:transcriptQueue.running.size},gaps:[]}),()=>worker,notifyIdle);
+ const quiescence=new MediaQuiescence(directory,()=>({counts:{closing:closing?1:0,activeCalls:[...leases.values()].filter(lease=>lease.voice.id&&!['ended','error'].includes(lease.voice.status)).length,captureRequests:[...leases.values()].reduce((sum,lease)=>sum+[...lease.requests.values()].filter(request=>request.outcome!=='completed'&&Date.now()-request.createdAt<=30000).length,0),pendingTranscripts:transcriptQueue.pendingCount(),unknownTranscripts:transcriptQueue.unknownCount(),transcriptDrains:transcriptQueue.running.size},gaps:[]}),()=>worker,notifyIdle,()=>{
+  validateMediaStore(join(directory,'transcript-intents.sqlite'),'transcripts');
+  if(voicePreferences)validateMediaStore(join(directory,'voice-preferences.sqlite'),'preferences');
+ });
  let preferences;try{preferences=voicePreferences?new VoicePreferences(directory,async(operation,args,context)=>{
   if(operation==='voice.preferences.receipt')return voicePreferences(operation,args,context);
   if(configuring||startingMedia||[...leases.values()].some(item=>item.voice.id&&!['ended','error'].includes(item.voice.status)))throw Object.assign(Error('End active calls and voice previews before changing shared voice defaults.'),{data:{executed:false,reason:'media-active'}});
@@ -27,7 +31,11 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
  const settleCall=(lease,result)=>{if(result?.closed===true)lease.endResult=result;if(lease.voice.id)quiescence.call(lease.id,result?.finalized===true?null:'unverified');};
  const persist=async(key,value)=>{const file=join(directory,'receipts',digest(key)+'.json'),tmp=file+'.'+randomUUID();await writeFile(tmp,JSON.stringify(value),{mode:0o600});await rename(tmp,file)};
  const load=async key=>{try{return JSON.parse(await readFile(join(directory,'receipts',digest(key)+'.json'),'utf8'))}catch(error){if(error.code==='ENOENT')return null;throw error}};
- const changed=session=>{revision++;onChanged('voice',session)};const transcriptQueue=new TranscriptQueue(join(directory,'transcript-intents.sqlite'),{record:recordTranscript,onRecorded:changed,admit:work=>quiescence.effect(work)});await chmod(join(directory,'transcript-intents.sqlite'),0o600);const flushTranscripts=session=>transcriptQueue.flush(session);
+ const changed=session=>{revision++;onChanged('voice',session)};let transcriptQueue;try{
+  transcriptQueue=new TranscriptQueue(join(directory,'transcript-intents.sqlite'),{record:recordTranscript,onRecorded:changed,admit:work=>quiescence.effect(work)});
+  await chmod(join(directory,'transcript-intents.sqlite'),0o600);
+ }catch(error){try{await transcriptQueue?.close();}finally{try{await preferences?.close();}finally{quiescence.close();}}throw error;}
+ const flushTranscripts=session=>transcriptQueue.flush(session);
  const valid=async(lease,{cleanup=false}={})=>{if(!lease||(!cleanup&&(lease.expiresAt<Date.now()||!await clientPresent(lease.session,lease.clientId))))throw fail('Media permission expired or this client detached. Choose the source again.');return lease};
  const callbackLease=async args=>{const lease=leases.get(args.lease);await valid(lease,{cleanup:['status','usage','transcript'].includes(args.operation)});if(lease.session!==args.session||lease.clientId!==args.clientId)throw fail('Media scope mismatch.',403);return lease};
  const ensureWorker=()=>worker??=workerFactory({python,pythonMode,onMayBeIdle:notifyIdle,callbacks:Object.fromEntries(Object.entries({

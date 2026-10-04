@@ -338,3 +338,33 @@ and a failed preferred model does not attempt automatic fallback.
 These checks do not qualify browser gestures, microphone/camera/speaker, native
 screen permission, real audio, provider accounts, OS service stop or deployed
 adoption. F02.04's browser/device boundary remains with the client owner.
+
+
+### Existing-store startup safety
+
+Media validates all configured authoritative stores under its existing lifetime
+exclusion lease before any authority opens writable. Read-only preflight checks
+fixed table and referenced-column metadata only: quiescence `fence`, `receipts`
+and `calls`; transcript `intents`; and, when shared voice preferences are
+configured, the account-bound preference `commands` journal. Missing authority
+refuses startup without schema repair, guessed replay or inferred provider closure.
+Partial startup failures close their database handles and release ownership.
+
+New authority initializes only when its main database and all WAL, SHM and
+rollback-journal paths are absent. Empty or dangling sidecars are surviving
+evidence, and a dangling main path cannot be treated as fresh. Read-only SQLite
+may update derived SHM or create empty coordination sidecars; refused startup
+preserves authoritative main and pre-existing nonempty WAL contents.
+
+The transcript `history` table remains a derived, native-confirmed projection.
+Its existing empty-table rebuild and index creation are preserved after append
+intent validation, without native-history reads, append replay or a full-store
+scan. Disabled shared preferences remain optional; startup does not open their
+store or invent an action.
+
+This guard does not detect arbitrary schema or constraint tampering, general
+individual-row deletion, or disappearance of a main database together with all
+its sidecars. It adds no migration inferred from missing authority and no copied
+or mirrored database. Native history, settings and receipts remain with their
+existing owners; this JS startup guard does not qualify the Python dependency
+graph, physical devices or provider accounts.
