@@ -53,7 +53,7 @@ class Rpc:
         if method=='runtime.inspect':
             root=Path(__file__).resolve().parent
             files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.iterdir()) if p.is_file() and p.suffix in ('.py','.json')}
-            loaded={name:Path(module.__file__).resolve() for name,module in list(sys.modules.items()) if name.startswith('amplifier_unified_media') and getattr(module,'__file__',None)}
+            loaded={name:Path(module.__file__).resolve() for name,module in list(sys.modules.items()) if getattr(module,'__file__',None) and (name.startswith('amplifier_unified_media') or (name=='__main__' and Path(module.__file__).resolve().parent==root))}
             return {'isolated':bool(sys.flags.isolated),'dontWriteBytecode':bool(sys.dont_write_bytecode),'packageFiles':files,'loadedModules':{name:{'file':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'withinPackage':p.parent==root} for name,p in sorted(loaded.items())}}
         if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work(),'serviceStop':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True}}
         if method=='quiescence.acquire':
