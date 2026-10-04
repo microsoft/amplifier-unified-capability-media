@@ -1,5 +1,6 @@
 """Bidirectional JSON-RPC worker. Credentials only transit private stdio, never disk."""
-import asyncio, json, sys, uuid
+import asyncio, json, sys, uuid, hashlib
+from pathlib import Path
 import aiohttp
 from .voice import VoiceCall, VoiceError, ProviderError, API, MODELS
 from .voice_diagnostics import VoiceDiagnostics
@@ -49,6 +50,11 @@ class Rpc:
             if any(value['serviceIdentity'][key]!=value[key] for key in ('instanceId','dataScope')):raise ValueError('Service identity differs from media worker fence')
         return value
     async def dispatch(self, method, args):
+        if method=='runtime.inspect':
+            root=Path(__file__).resolve().parent
+            files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.iterdir()) if p.is_file() and p.suffix in ('.py','.json')}
+            loaded={name:Path(module.__file__).resolve() for name,module in list(sys.modules.items()) if name.startswith('amplifier_unified_media') and getattr(module,'__file__',None)}
+            return {'isolated':bool(sys.flags.isolated),'dontWriteBytecode':bool(sys.dont_write_bytecode),'packageFiles':files,'loadedModules':{name:{'file':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'withinPackage':p.parent==root} for name,p in sorted(loaded.items())}}
         if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work(),'serviceStop':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True}}
         if method=='quiescence.acquire':
             context=self.context(args);owner=args['ownerId']

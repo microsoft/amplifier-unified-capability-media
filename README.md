@@ -40,7 +40,8 @@ preflight; changed settings never reclassify an earlier effect or permit replay.
 `createMediaCapability` takes durable private `directory`, `inspectSession`,
 `delegate`, `recordTranscript`, and optional `recordUsage`, `subscribeSession`,
 `resolveCredential`, `settings`, `configure`, `recordCapture`, `clientPresent`,
-`nativeStatus`, `nativeCapture`, `enableNative`, `onChanged`, `python` callbacks.
+`nativeStatus`, `nativeCapture`, `enableNative`, `onChanged`, `python` callbacks,
+and `pythonMode`.
 
 - `inspectSession(sessionURI)` returns bounded title/activity/messages/workers.
 - `subscribeSession(sessionURI, onBoundedContext)` returns an unsubscribe or promise.
@@ -84,7 +85,16 @@ no new camera feature.
 
 Install the Python transport separately: `uv sync --extra openai` (optional native
 library must be installed in that same interpreter). Pass the resulting Python
-path to the factory. Node-only fixture peers need no Python dependencies.
+path to the factory. Deployment bindings must explicitly select
+`pythonMode: "installed"`: the owner launches exactly `-I -B -m
+amplifier_unified_media.worker`, removes inherited `PYTHONPATH`/`PYTHONHOME`, and
+uses the interpreter's installed wheel without bundled-source overlays or
+bytecode writes. The default `pythonMode: "package-source"` explicitly preserves
+local development compatibility through the packaged Python source directory.
+No automatic fallback changes runtime modes. Private worker `runtime.inspect`
+reports isolated/bytecode flags and package/loaded-module hashes for deployment
+qualification; it reads no credential or provider state and has no public HTTP
+route. Node-only fixture peers need no Python dependencies.
 
 Verification: `npm test`; `uv run --extra test python -m pytest -q`. All tests use
 fixtures. Source/fixture checks do not establish real-account audio, physical

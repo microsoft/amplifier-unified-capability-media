@@ -3,9 +3,12 @@ import {createInterface} from 'node:readline';
 import {fileURLToPath} from 'node:url';
 /** Bounded private RPC transport. Worker shutdown affects media only; admitted
  * host work remains owned by its host turn and is never replayed here. */
-export function createPythonWorker({python='python3',callbacks={},onMayBeIdle=()=>{},env={},maxFrame=2*1024*1024,maxPending=64,requestTimeout=650000,closeTimeout=12000,spawnImpl=spawn}={}){
- const directory=fileURLToPath(new URL('../python/',import.meta.url));
- const child=spawnImpl(python,['-m','amplifier_unified_media.worker'],{env:{...process.env,...env,PYTHONPATH:[directory,env.PYTHONPATH||process.env.PYTHONPATH].filter(Boolean).join(':')},stdio:['pipe','pipe','pipe']});
+export function createPythonWorker({python='python3',pythonMode='package-source',callbacks={},onMayBeIdle=()=>{},env={},maxFrame=2*1024*1024,maxPending=64,requestTimeout=650000,closeTimeout=12000,spawnImpl=spawn}={}){
+ if(!['package-source','installed'].includes(pythonMode))throw Error('Unknown media Python runtime mode.');
+ const childEnv={...process.env,...env};let args;
+ if(pythonMode==='installed'){delete childEnv.PYTHONPATH;delete childEnv.PYTHONHOME;args=['-I','-B','-m','amplifier_unified_media.worker'];}
+ else{const directory=fileURLToPath(new URL('../python/',import.meta.url));childEnv.PYTHONPATH=[directory,env.PYTHONPATH||process.env.PYTHONPATH].filter(Boolean).join(':');args=['-m','amplifier_unified_media.worker'];}
+ const child=spawnImpl(python,args,{env:childEnv,stdio:['pipe','pipe','pipe']});
  let next=0,ended=false,closing=false,frame=0,callbacksActive=0;const pending=new Map();let exitResolve;const exited=new Promise(resolve=>exitResolve=resolve);child.stderr.on('data',()=>{});
  const fail=()=>{ended=true;for(const item of pending.values()){clearTimeout(item.timer);item.reject(Error('The media worker disconnected; effect outcome is unknown.'))}pending.clear()};
  const send=value=>{if(ended)throw Error('The media worker ended. The previous effect may be unknown.');const data=JSON.stringify(value)+'\n';if(Buffer.byteLength(data)>maxFrame)throw Error('Media RPC frame exceeds its bound.');child.stdin.write(data,error=>{if(error)fail()})};
