@@ -20,6 +20,7 @@ export class TranscriptQueue{
   return {durability:'pending',commandId:command};
  }
  pendingCount(){return Number(this.db.prepare("SELECT count(*) n FROM intents WHERE status='pending'").get().n);}
+ unknownCount(){return Number(this.db.prepare("SELECT count(*) n FROM intents WHERE status='unknown'").get().n);}
  async flush(session){return this.admit(()=>this.flushSelected(session));}
  async flushSelected(session){if(this.closed)return;if(typeof session!=='string')throw Error('Transcript drain requires one explicit session.');if(this.running.has(session))return this.running.get(session);const work=this.drain(session);this.running.set(session,work);try{return await work}finally{this.running.delete(session)}}
  async drain(session){let count=0;const busyCalls=new Set();while(count++<64&&!this.closed){

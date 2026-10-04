@@ -68,3 +68,7 @@ catalog also lists `microsoft/amplifier-voice` and
 dependencies. Their installed runtime behavior is outside this qualification.
 The guard belongs to this media owner's lease/maintenance storage, rather than
 those products or native session ownership. No automatic fallback is introduced.
+
+## Retained transcript delivery and maintenance
+
+M2/M3/M7 regression: after an actual transcript callback loses its native acknowledgement and a provider call is conclusively finalized, the Node owner reports `unknownTranscripts` separately from `pendingTranscripts`. Recovery, update, retention, managed-file disposal and service-stop acquisition refuse before worker acquisition. Cold restart preserves the exact retained intent and never retries it. Pending delivery also refuses; confirmed native delivery permits acquisition. The independently installed Host QuiescenceGate composition refuses recovery before native retirement. These checks use synthetic provider transport and owned SQLite state; they do not qualify a live graph, account or device.
