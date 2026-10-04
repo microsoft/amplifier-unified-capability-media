@@ -83,7 +83,11 @@ class Rpc:
             attempt=self.admissions.get(context['fenceId'])
             if not attempt or attempt['context']!=context:raise ValueError('Original media worker admission attempt unavailable; absence is not proof')
             if any(self.work().values()):raise ValueError('Media worker admission work remains pending')
-            if self.fence is not None:
+            released=self.released.get(context['fenceId'])
+            # A conclusive original unchanged release can precede the distinct
+            # authenticated abort during a partially failed supervisor unwind.
+            if attempt['status']=='held' and released and released['context']==context and released['outcome']=='unchanged':status='released'
+            elif self.fence is not None:
                 if self.fence!=context:raise ValueError('Different media worker fence held')
                 status='released'
             elif attempt['status']=='refused' and context['fenceId'] not in self.released:status='not-acquired'
@@ -92,7 +96,7 @@ class Rpc:
             receipt.update(status=status,receiptId='media-worker-admission-abort:'+hashlib.sha256(json.dumps([context,proof],sort_keys=True,separators=(',',':')).encode()).hexdigest())
             self.aborted[context['fenceId']]={'context':context,'signature':signature,'receipt':receipt}
             while len(self.aborted)>256:self.aborted.pop(next(iter(self.aborted)))
-            self.fence=None;self.live_fence=None
+            if self.fence==context:self.fence=None;self.live_fence=None
             return dict(receipt)
         if method=='quiescence.release':
             context=self.context(args);old=self.fence

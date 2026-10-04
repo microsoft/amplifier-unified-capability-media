@@ -103,6 +103,50 @@ test('actual process death preserves an original no-worker attempt for exact aut
 });
 
 const python=process.env.MEDIA_WORKER_PYTHON;
+test('partial unwind: conclusive unchanged release survives restart and a distinct abort preserves a newer hold',async t=>{
+ const f=await fixture(t),c=context('unwound'),lease=await f.gate.participant().acquire(c);
+ await lease.release('unchanged',{kind:'admission-refused'});f.restart();
+ await assert.rejects(abort(f.gate,c,{kind:'admission-refused'}),/abort proof/);
+ const next=context('after-unwind');await f.gate.participant().acquire(next);
+ const held=f.gate.current();f.counts.effects=1;
+ await assert.rejects(abort(f.gate,c),/pending or unknown/);f.counts.effects=0;
+ const result=await abort(f.gate,c);assert.equal(result.status,'released');
+ assert.deepEqual(f.gate.current(),held);assert.equal(f.gate.liveFence,next.fenceId);
+ f.restart();assert.deepEqual(await abort(f.gate,c),result);assert.equal(f.gate.current().fenceId,next.fenceId);
+ await assert.rejects(abort(f.gate,c,{...proof(c),receiptId:'changed'}),/retained proof/);
+ await abort(f.gate,next);
+});
+
+test('partial unwind: actual worker release evidence and Node journal preserve newer holds after restart',{skip:!python},async t=>{
+ const actual=createPythonWorker({python});t.after(()=>actual.close());let releases=0,aborts=0,available=true;
+ const worker={async request(method,args){if(method==='quiescence.release')releases++;if(method==='quiescence.abortAdmission')aborts++;return actual.request(method,args)}};
+ const f=await fixture(t,{worker:()=>available?worker:undefined}),c=context('worker-unwound'),lease=await f.gate.participant().acquire(c);
+ await lease.release('unchanged',{kind:'admission-refused'});f.restart();
+ const next=context('worker-after-unwind');await f.gate.participant().acquire(next);
+ const workerHeld=(await actual.request('quiescence.inspect',{})).fence;
+ const wr=await actual.request('quiescence.abortAdmission',{ownerId:'media',context:c,proof:proof(c)});
+ assert.equal(wr.status,'released');assert.deepEqual((await actual.request('quiescence.inspect',{})).fence,workerHeld);
+ const result=await abort(f.gate,c);assert.equal(result.status,'released');
+ assert.equal(f.gate.current().fenceId,next.fenceId);assert.equal(f.gate.liveFence,next.fenceId);
+ assert.deepEqual((await actual.request('quiescence.inspect',{})).fence,workerHeld);
+ f.restart();assert.deepEqual(await abort(f.gate,c),result);assert.equal(releases,1);assert.equal(aborts,0);
+ await abort(f.gate,next);
+ const retired=context('conclusively-unwound-worker-retired'),retiredLease=await f.gate.participant().acquire(retired);
+ await retiredLease.release('unchanged',{kind:'admission-refused'});await actual.close();available=false;f.restart();
+ assert.equal((await abort(f.gate,retired)).status,'released');assert.equal(releases,2);assert.equal(aborts,1);
+});
+
+test('ready release and missing conclusive unchanged release evidence cannot settle admission abort',async t=>{
+ const f=await fixture(t),c=context('ready-release'),lease=await f.gate.participant().acquire(c);
+ await lease.release('ready',{verified:true,fenceId:c.fenceId,commandId:c.commandId,dataScope:c.dataScope,outcome:'ready',instanceId:'replacement',receiptId:'ready'});
+ f.restart();await assert.rejects(abort(f.gate,c),/settlement is unavailable/);
+ const other=await fixture(t),u=context('lost-conclusive-release'),l=await other.gate.participant().acquire(u);
+ await l.release('unchanged',{kind:'admission-refused'});
+ const retained=JSON.parse(other.gate.db.prepare('SELECT value FROM receipts WHERE id=?').get(u.fenceId).value);
+ delete retained.releaseSignature;other.gate.record(retained);other.restart();
+ await assert.rejects(abort(other.gate,u),/settlement is unavailable/);
+});
+
 test('actual Python worker retains exact abort after lost acquire and abort replies without re-execution',{skip:!python},async t=>{
  const actual=createPythonWorker({python});t.after(()=>actual.close());let acquire=0,aborts=0;
  const worker={async request(method,args){const result=await actual.request(method,args);if(method==='quiescence.acquire'&&++acquire===1)throw Error('acquire reply lost');if(method==='quiescence.abortAdmission'&&++aborts===1)throw Error('abort reply lost');return result}};

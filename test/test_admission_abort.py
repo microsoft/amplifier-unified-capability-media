@@ -52,7 +52,25 @@ async def test_generic_or_malformed_proof_cannot_authorize_abort(proof):
     assert rpc.fence is not None
 
 @pytest.mark.asyncio
-async def test_completed_generic_release_is_not_reclassified_as_admission_abort():
+@pytest.mark.parametrize('newer_hold',[False,True])
+async def test_partial_unwind_requires_distinct_abort_and_preserves_newer_hold(newer_hold):
     rpc=Rpc();await rpc.dispatch('quiescence.acquire',ARGS)
     await rpc.dispatch('quiescence.release',{**ARGS,'outcome':'unchanged','proof':{'kind':'admission-refused'}})
+    with pytest.raises(ValueError,match='abort proof'):await rpc.dispatch('quiescence.abortAdmission',{**ARGS,'proof':{'kind':'admission-refused'}})
+    if newer_hold:await rpc.dispatch('quiescence.acquire',{**ARGS,'context':{**CONTEXT,'fenceId':'newer','commandId':'newer-command'}})
+    held=rpc.fence;live=rpc.live_fence;rpc.effects=1
+    with pytest.raises(ValueError,match='pending'):await rpc.dispatch('quiescence.abortAdmission',{**ARGS,'proof':PROOF})
+    rpc.effects=0;result=await rpc.dispatch('quiescence.abortAdmission',{**ARGS,'proof':PROOF})
+    assert result['status']=='released' and rpc.fence==held and rpc.live_fence==live
+    assert await rpc.dispatch('quiescence.abortAdmission',{**ARGS,'proof':PROOF})==result
+    assert rpc.fence==held and rpc.live_fence==live
+
+@pytest.mark.asyncio
+async def test_ready_release_or_lost_release_cache_is_not_partial_unwind_evidence():
+    rpc=Rpc();await rpc.dispatch('quiescence.acquire',ARGS)
+    ready=dict(verified=True,fenceId=CONTEXT['fenceId'],commandId=CONTEXT['commandId'],dataScope=CONTEXT['dataScope'],outcome='ready',instanceId='replacement',receiptId='ready')
+    await rpc.dispatch('quiescence.release',{**ARGS,'outcome':'ready','proof':ready})
+    with pytest.raises(ValueError,match='authoritatively accounted'):await rpc.dispatch('quiescence.abortAdmission',{**ARGS,'proof':PROOF})
+    rpc=Rpc();await rpc.dispatch('quiescence.acquire',ARGS)
+    await rpc.dispatch('quiescence.release',{**ARGS,'outcome':'unchanged','proof':{'kind':'admission-refused'}});rpc.released.clear()
     with pytest.raises(ValueError,match='authoritatively accounted'):await rpc.dispatch('quiescence.abortAdmission',{**ARGS,'proof':PROOF})

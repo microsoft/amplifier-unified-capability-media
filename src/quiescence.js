@@ -68,31 +68,33 @@ export class MediaQuiescence {
   if(!prior||prior.ownerId!==ownerId||!same(prior,context)||prior.admissionAttemptVersion!==1)throw Error('Exact durable media admission attempt required; missing held row is not proof');
   if(prior.admissionAbortSignature&&prior.admissionAbortSignature!==signature)throw Error('Admission abort proof differs from retained proof');
   if(prior.state==='aborted')return structuredClone(prior.admissionAbortReceipt);
-  const old=this.current();
-  if(this.transition||prior.releaseSignature||(!old&&prior.state!=='refused')||(old&&(old.ownerId!==ownerId||!same(old,context))))throw Error('Media admission settlement is unavailable or already running');
+  const old=this.current(),ownsHold=old&&old.ownerId===ownerId&&same(old,context);
+  // A completed unchanged release was journaled only after its original worker
+  // acknowledged release. It proves the original acquisition was conclusively
+  // unwound, including across restart; an absent held row alone never does.
+  const released=prior.state==='released'&&prior.outcome==='unchanged'&&typeof prior.releaseSignature==='string'&&!!prior.releaseSignature;
+  if(this.transition||(prior.releaseSignature&&!released)||(!ownsHold&&prior.state!=='refused'&&!released)||(old&&!ownsHold&&!released))throw Error('Media admission settlement is unavailable or already running');
   const work=this.inspect();if(work.activeRequests||work.gaps.length||Object.values(work.counts).some(value=>value>0))throw Error('Media admission work remains pending or unknown');
   this.transition=true;
   try{
-   prior.admissionAbortSignature=signature;if(old)this.save(prior);else this.record(prior);
-   const worker=this.worker();let status=old?'released':'not-acquired';
-   if(prior.workerAttempted){
+   prior.admissionAbortSignature=signature;if(ownsHold)this.save(prior);else this.record(prior);
+   const worker=this.worker();const status=ownsHold||released?'released':'not-acquired';
+   if(prior.workerAttempted&&!released){
     if(!worker)throw Error('Original media worker admission evidence unavailable after restart');
     const receipt=await worker.request('quiescence.abortAdmission',{ownerId,context:prior,proof:context.proof});
     if(!receipt||Object.keys(receipt).sort().join(',')!==ownerReceiptKeys||receipt.ownerId!==ownerId||!['released','not-acquired'].includes(receipt.status)||['commandId','fenceId','instanceId','dataScope'].some(key=>receipt[key]!==prior[key]))throw Error('Exact media worker admission abort receipt required');
-    if(!old&&receipt.status!=='not-acquired')throw Error('Worker receipt contradicts the retained media refusal');
+    if(!ownsHold&&receipt.status!=='not-acquired')throw Error('Worker receipt contradicts the retained media refusal');
     token(receipt.receiptId,'worker admission abort receipt');prior.workerAbortReceipt=receipt;
-    // The outer gate was acquired even if its worker conclusively refused.
-    status=old?'released':'not-acquired';
    }else if(worker){
     const state=await worker.request('quiescence.inspect',{});
-    if(!state||state.intakeClosed!==false||!state.counts||Object.values(state.counts).some(value=>!Number.isSafeInteger(value)||value!==0))throw Error('Media worker work remains pending or unknown');
+    if(!state||typeof state.intakeClosed!=='boolean'||(!released&&state.intakeClosed)||!state.counts||Object.values(state.counts).some(value=>!Number.isSafeInteger(value)||value!==0))throw Error('Media worker work remains pending or unknown');
    }
    const settledWork=this.inspect();if(settledWork.activeRequests||settledWork.gaps.length||Object.values(settledWork.counts).some(value=>value>0))throw Error('Media admission work changed before abort settlement');
    const receipt={ownerId,status,receiptId:'media-admission-abort:'+createHash('sha256').update(JSON.stringify([ownerId,signature])).digest('hex'),...Object.fromEntries(['commandId','fenceId','instanceId','dataScope'].map(key=>[key,prior[key]]))};
    const settled={...prior,state:'aborted',admissionAbortReceipt:receipt};
-   if(old)this.clear(settled);else this.record(settled);
-   this.liveFence=undefined;return structuredClone(receipt);
-  }catch(error){if(old){prior.state='unknown';this.save(prior);}throw error;}finally{this.transition=false;this.wakeIdle();}
+   if(ownsHold)this.clear(settled);else this.record(settled);
+   if(ownsHold)this.liveFence=undefined;return structuredClone(receipt);
+  }catch(error){if(ownsHold){prior.state='unknown';this.save(prior);}throw error;}finally{this.transition=false;this.wakeIdle();}
  }
  clear(value){this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT OR REPLACE INTO receipts VALUES(?,?)').run(value.fenceId,JSON.stringify(value));this.db.prepare('DELETE FROM fence WHERE id=1').run();this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}}
  async release(ownerId,context,outcome,proof,live=false){

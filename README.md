@@ -165,7 +165,18 @@ removal share one transaction; an identical proof retry returns the original
 receipt without repeating worker settlement or clearing a newer fence. Changed
 proofs, identities, pending work and unknown provider lifetimes refuse.
 
-If acquisition reached an existing worker, private
+During a partial supervisor unwind, the original live lease may already have
+completed an exact `unchanged` release before another owner fails. That durable
+completed release, together with the original attempted acquisition, allows a
+later distinct authenticated abort to return `released` after Node restart. The
+Node completed-release journal already includes acknowledgement of the original
+worker release when a worker participated. It does not repeat worker settlement
+or remove a newer Node or worker hold. The worker RPC likewise recognizes its
+exact original held attempt plus retained conclusive unchanged-release receipt.
+The old generic release proof alone cannot authorize the new abort; `ready`,
+unknown or incomplete release evidence cannot substitute for an unchanged unwind.
+
+If acquisition reached an existing worker without a completed unchanged release, private
 `quiescence.abortAdmission` must return the exact original worker receipt before
 the Node authority clears. The worker's bounded attempt/receipt cache is
 process-local; the Node journal owns durability. Lost replies can be reconciled
