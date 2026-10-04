@@ -7,7 +7,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {join} from 'node:path';
 const token=(value,name)=>{if(typeof value!=='string'||!value||value.length>200||/[\x00-\x1f]/.test(value))throw Error(`Invalid ${name}`);return value};
 const same=(a,b)=>['fenceId','commandId','purpose','instanceId','dataScope'].every(key=>a[key]===b[key])&&(a.purpose!=='service-stop'||sameIdentity(serviceIdentity(a.serviceIdentity),serviceIdentity(b.serviceIdentity)));
-const blocked=()=>Object.assign(Error('Media owner intake is closed for quiescence; no new effect was admitted.'),{status:409,executed:false});
+const blocked=()=>Object.assign(Error('Media owner intake is closed for quiescence; no new effect was admitted.'),{status:409,executed:false,mediaPublic:true});
 /** Private durable owner gate. A separate lifetime lock excludes a second writer. */
 export class MediaQuiescence {
  constructor(directory,inspect,worker,onMayBeIdle=()=>{}){

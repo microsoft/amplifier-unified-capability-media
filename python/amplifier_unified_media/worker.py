@@ -33,7 +33,8 @@ class Rpc:
         except Exception as error:
             # Provider errors are already sanitized. Never return arbitrary HTTP payloads.
             text=str(error) if isinstance(error,(VoiceError,ValueError)) else 'Media transport failed; the outcome may be unknown.'
-            self.send({'jsonrpc':'2.0','id':identity,'error':{'code':-32000,'message':text[:500]}})
+            details={'source':'voice-provider','status':error.status,**({'executed':False} if getattr(error,'media_not_executed',False) else {})} if isinstance(error,ProviderError) and error.status in (401,403,404,429) else None
+            self.send({'jsonrpc':'2.0','id':identity,'error':{'code':-32000,'message':text[:500],**({'data':details} if details else {})}})
     def work(self):
         self.calls={call for call in self.calls if not call.closed or any(not task.done() for task in call.tasks) or any(task and not task.done() for task in (call.pump,call.observer))}
         return {'effects':self.effects,'owners':len(self.owners),'callbacks':len(self.pending),'callTasks':sum(sum(not task.done() for task in call.tasks) for call in self.calls),'liveCalls':sum(not call.closed for call in self.calls),'transportTasks':sum(sum(bool(task and not task.done()) for task in (call.pump,call.observer)) for call in self.calls)}
@@ -109,7 +110,8 @@ class Rpc:
                 result=await call.create(sdp,provider)
                 await owner.set_voice_status({'status':'connecting',**{k:v for k,v in result.items() if k!='sdp'}})
                 return result
-            except Exception:
+            except Exception as error:
+                if isinstance(error,ProviderError) and not getattr(owner.call,'id','') and error.status in (401,403,404,429):error.media_not_executed=True
                 if owner.call: await owner.call.close()
                 self.owners.pop(lease,None); await owner.http.close(); raise
             finally:

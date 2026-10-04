@@ -68,7 +68,7 @@ test('known native preflight refusal is failed; unknown effect never becomes a k
 
 test('preference writes exclude call startup and keep whole native promise inside held intake',async()=>{
  let release,entered;const started=new Promise(resolve=>entered=resolve),wait=new Promise(resolve=>release=resolve);let updates=0;
- const f=await fixture({resolveCredential:async()=>'fixture',voicePreferences:async(op,args)=>{if(op.endsWith('receipt'))return null;updates++;entered();await wait;return receipt(args.commandId,{...base(),voice:'cedar'})}});
+ const f=await fixture({settings:async()=>({...base(),available:true,credentialAccess:'enabled'}),resolveCredential:async()=>'fixture',voicePreferences:async(op,args)=>{if(op.endsWith('receipt'))return null;updates++;entered();await wait;return receipt(args.commandId,{...base(),voice:'cedar'})}});
  try{
   const lease=(await f.provider.action({channel:session,operation:'media.attach'},context)).result.lease;
   const saving=f.provider.action(request('voice.preferences.update',{expectedRevision:'a'.repeat(64),patch:{voice:'cedar'}}),context);await started;
@@ -107,7 +107,7 @@ test('installed native adapter and media preserve shared CAS, loss recovery and 
 
 test('active preview and established calls refuse preference changes before the native callback',async()=>{
  let updates=0,release,entered;const started=new Promise(resolve=>entered=resolve),waiting=new Promise(resolve=>release=resolve);
- const f=await fixture({resolveCredential:async()=>'fixture-only',voicePreferences:async(_op,args)=>{updates++;return receipt(args.commandId,base())},workerFactory:()=>({request:async method=>{if(method==='preview'){entered();await waiting;return {audio:'fixture'}}if(method==='connect')return {id:'active-call'};return {closed:true,finalized:true}},close(){}})});
+ const f=await fixture({settings:async()=>({...base(),available:true,credentialAccess:'enabled'}),resolveCredential:async()=>'fixture-only',voicePreferences:async(_op,args)=>{updates++;return receipt(args.commandId,base())},workerFactory:()=>({request:async method=>{if(method==='preview'){entered();await waiting;return {audio:'fixture'}}if(method==='connect')return {id:'active-call'};return {closed:true,finalized:true}},close(){}})});
  const cmd=()=>request('voice.preferences.update',{expectedRevision:'a'.repeat(64),patch:{voice:'cedar'}});
  try{
   const lease=(await f.provider.action({channel:session,operation:'media.attach'},context)).result.lease;
