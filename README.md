@@ -17,11 +17,31 @@ Passive configuration reads use sanitized `settings()` metadata:
 as unavailable. These reads never call `resolveCredential` or start a worker;
 credential resolution belongs only to an explicit voice connection or preview.
 The settings owner must not include secrets in this public projection.
+The additive `availability` field distinguishes `disabled`, `missing-credentials`,
+`configured`, and `unavailable`. `credentialValidation: "not-checked"` means
+configured key presence does not prove account access. Voice access is independent
+of `enableNative` (foreground capture). Connect and preview preflight metadata and
+credentials before starting a worker or durable provider-call lifetime marker.
+
+Voice HTTP failures return fixed actionable `error` copy, a stable `voice_*`
+`code`, `outcome: "rejected" | "unknown"`, and `retryable: false`. Only a proved
+preflight or provider refusal includes `executed: false`. Private provider status
+401 maps to rejected credentials, 403/404 to unavailable model access, and 429 to
+usage limits. Provider bodies and arbitrary callback exceptions are never public
+copy. A conclusive refusal before provider call identity leaves no call lifetime
+marker; its command receipt remains inert. Transport loss or any failure after
+call identity remains uncertain and is never automatically replayed. Credential
+configuration accepts only `source` (`environment` or `private`) and an optional
+bounded single-line `apiKey`; its response is a fresh sanitized projection. A
+failed projection read after saving leaves the save outcome unknown. Retained
+command identity, fingerprint and outcome are checked before fresh credential
+preflight; changed settings never reclassify an earlier effect or permit replay.
 
 `createMediaCapability` takes durable private `directory`, `inspectSession`,
 `delegate`, `recordTranscript`, and optional `recordUsage`, `subscribeSession`,
 `resolveCredential`, `settings`, `configure`, `recordCapture`, `clientPresent`,
-`nativeStatus`, `nativeCapture`, `enableNative`, `onChanged`, `python` callbacks.
+`nativeStatus`, `nativeCapture`, `enableNative`, `onChanged`, `python` callbacks,
+and `pythonMode`.
 
 - `inspectSession(sessionURI)` returns bounded title/activity/messages/workers.
 - `subscribeSession(sessionURI, onBoundedContext)` returns an unsubscribe or promise.
@@ -65,7 +85,16 @@ no new camera feature.
 
 Install the Python transport separately: `uv sync --extra openai` (optional native
 library must be installed in that same interpreter). Pass the resulting Python
-path to the factory. Node-only fixture peers need no Python dependencies.
+path to the factory. Deployment bindings must explicitly select
+`pythonMode: "installed"`: the owner launches exactly `-I -B -m
+amplifier_unified_media.worker`, removes inherited `PYTHONPATH`/`PYTHONHOME`, and
+uses the interpreter's installed wheel without bundled-source overlays or
+bytecode writes. The default `pythonMode: "package-source"` explicitly preserves
+local development compatibility through the packaged Python source directory.
+No automatic fallback changes runtime modes. Private worker `runtime.inspect`
+reports isolated/bytecode flags and package/loaded-module hashes for deployment
+qualification; it reads no credential or provider state and has no public HTTP
+route. Node-only fixture peers need no Python dependencies.
 
 Verification: `npm test`; `uv run --extra test python -m pytest -q`. All tests use
 fixtures. Source/fixture checks do not establish real-account audio, physical
