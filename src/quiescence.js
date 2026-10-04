@@ -5,20 +5,26 @@ const canonicalProof=value=>Array.isArray(value)?value.map(canonicalProof):value
 const releaseSignature=(outcome,proof)=>JSON.stringify([outcome,canonicalProof(proof)]);
 import {DatabaseSync} from 'node:sqlite';
 import {join} from 'node:path';
+import {validateMediaStore} from './store-startup.js';
 const token=(value,name)=>{if(typeof value!=='string'||!value||value.length>200||/[\x00-\x1f]/.test(value))throw Error(`Invalid ${name}`);return value};
 const same=(a,b)=>['fenceId','commandId','purpose','instanceId','dataScope'].every(key=>a[key]===b[key])&&(a.purpose!=='service-stop'||sameIdentity(serviceIdentity(a.serviceIdentity),serviceIdentity(b.serviceIdentity)));
 const blocked=()=>Object.assign(Error('Media owner intake is closed for quiescence; no new effect was admitted.'),{status:409,executed:false,mediaPublic:true});
 /** Private durable owner gate. A separate lifetime lock excludes a second writer. */
 export class MediaQuiescence {
- constructor(directory,inspect,worker,onMayBeIdle=()=>{}){
+ constructor(directory,inspect,worker,onMayBeIdle=()=>{},validateAuthority=()=>{}){
   this.inspectWork=inspect;this.worker=worker;this.onMayBeIdle=onMayBeIdle;this.active=0;this.transition=false;this.idleWaiters=new Set();
   this.lock=new DatabaseSync(join(directory,'media-owner-lock.sqlite'));try{this.lock.exec('PRAGMA busy_timeout=0; CREATE TABLE IF NOT EXISTS owner(id INTEGER); BEGIN EXCLUSIVE');}catch(error){this.lock.close();throw error;}
-  this.db=new DatabaseSync(join(directory,'media-quiescence.sqlite'));this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-   CREATE TABLE IF NOT EXISTS fence(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);
-   CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,value TEXT NOT NULL);
-   CREATE TABLE IF NOT EXISTS calls(id TEXT PRIMARY KEY,state TEXT NOT NULL);`);
-  const old=this.current();if(old){old.state='unknown';this.save(old);}
-  this.db.prepare("UPDATE calls SET state='unverified' WHERE state<>'unverified'").run();
+  try{
+   const path=join(directory,'media-quiescence.sqlite'),existing=validateMediaStore(path,'quiescence');
+   // Every configured composed store must pass before any authority opens writable.
+   validateAuthority();
+   this.db=new DatabaseSync(path);this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL');
+   if(!existing)this.db.exec(`CREATE TABLE fence(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NOT NULL);
+    CREATE TABLE receipts(id TEXT PRIMARY KEY,value TEXT NOT NULL);
+    CREATE TABLE calls(id TEXT PRIMARY KEY,state TEXT NOT NULL);`);
+   const old=this.current();if(old){old.state='unknown';this.save(old);}
+   this.db.prepare("UPDATE calls SET state='unverified' WHERE state<>'unverified'").run();
+  }catch(error){try{this.db?.close();}finally{this.lock.close();}throw error;}
  }
  current(){const row=this.db.prepare('SELECT value FROM fence WHERE id=1').get();return row&&JSON.parse(row.value);}
  save(value){this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT OR REPLACE INTO fence VALUES(1,?)').run(JSON.stringify(value));this.db.prepare('INSERT OR REPLACE INTO receipts VALUES(?,?)').run(value.fenceId,JSON.stringify(value));this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}}

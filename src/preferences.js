@@ -2,6 +2,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
 import {chmodSync} from 'node:fs';
 import {join} from 'node:path';
+import {validateMediaStore} from './store-startup.js';
 const fields=['preferredModel','fallbackModel','voice','interruptions'];
 const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
 const token=(value,name)=>{if(typeof value!=='string'||!value||value.length>200||/[\x00-\x1f]/.test(value))throw Error(`A bounded ${name} is required`);return value};
@@ -35,8 +36,8 @@ export function projectPreferences(value={},writable=false){
 /** Account-bound no-replay journal, protected by the enclosing media OS owner. */
 export class VoicePreferences {
  constructor(directory,invoke,onSaved){
-  this.invoke=invoke;this.onSaved=onSaved;this.pending=new Map();const path=join(directory,'voice-preferences.sqlite');this.db=new DatabaseSync(path);
-  try{chmodSync(path,0o600);this.db.exec('PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;CREATE TABLE IF NOT EXISTS commands(account TEXT NOT NULL,id TEXT NOT NULL,fingerprint TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(account,id));')}catch(error){this.db.close();throw error}
+  this.invoke=invoke;this.onSaved=onSaved;this.pending=new Map();const path=join(directory,'voice-preferences.sqlite'),existing=validateMediaStore(path,'preferences');this.db=new DatabaseSync(path);
+  try{chmodSync(path,0o600);this.db.exec('PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL');if(!existing)this.db.exec('CREATE TABLE commands(account TEXT NOT NULL,id TEXT NOT NULL,fingerprint TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(account,id));')}catch(error){this.db.close();throw error}
  }
  row(account,id){const row=this.db.prepare('SELECT * FROM commands WHERE account=? AND id=?').get(account,id);return row&&{...row,body:JSON.parse(row.body)};}
  save(account,id,body){this.db.prepare('UPDATE commands SET body=? WHERE account=? AND id=?').run(JSON.stringify(body),account,id);}
