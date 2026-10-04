@@ -32,7 +32,10 @@ copy. A conclusive refusal before provider call identity leaves no call lifetime
 marker; its command receipt remains inert. Transport loss or any failure after
 call identity remains uncertain and is never automatically replayed. Credential
 configuration accepts only `source` (`environment` or `private`) and an optional
-bounded single-line `apiKey`; its response is a fresh sanitized projection.
+bounded single-line `apiKey`; its response is a fresh sanitized projection. A
+failed projection read after saving leaves the save outcome unknown. Retained
+command identity, fingerprint and outcome are checked before fresh credential
+preflight; changed settings never reclassify an earlier effect or permit replay.
 
 `createMediaCapability` takes durable private `directory`, `inspectSession`,
 `delegate`, `recordTranscript`, and optional `recordUsage`, `subscribeSession`,
