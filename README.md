@@ -23,6 +23,12 @@ configured key presence does not prove account access. Voice access is independe
 of `enableNative` (foreground capture). Connect and preview preflight metadata and
 credentials before starting a worker or durable provider-call lifetime marker.
 
+`environmentAvailable` and `privateKeyAvailable` retain only the credential owner's
+boolean presence metadata, or `null` when unknown or credential access is disabled.
+Clients can offer the existing host OpenAI key and identify a saved private voice
+key without obtaining either value. Saving a connection returns a fresh effective
+configuration; only an explicit call or preview resolves its selected credential.
+
 Voice HTTP failures return fixed actionable `error` copy, a stable `voice_*`
 `code`, `outcome: "rejected" | "unknown"`, and `retryable: false`. Only a proved
 preflight or provider refusal includes `executed: false`. Private provider status

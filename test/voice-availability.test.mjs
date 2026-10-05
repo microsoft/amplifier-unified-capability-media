@@ -1,6 +1,32 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 const {createMediaCapability}=await import(process.env.MEDIA_CAPABILITY_MODULE??'../src/index.js');
 const sentinel='fixture-secret-do-not-project',fence={fenceId:'idle',commandId:'check',purpose:'recovery',instanceId:'host',dataScope:'owned'};
+test('credential source presence survives public configuration without resolving secrets',async()=>{
+ for(const metadata of [{environmentAvailable:true,privateKeyAvailable:false},{environmentAvailable:false,privateKeyAvailable:true},{environmentAvailable:sentinel,privateKeyAvailable:sentinel},{credentialAccess:'disabled',environmentAvailable:true,privateKeyAvailable:true}]){
+  const f=await fixture({settings:async()=>({available:true,credentialAccess:'enabled',...metadata})});
+  try{
+   const expected=Object.fromEntries(['environmentAvailable','privateKeyAvailable'].map(key=>[key,metadata.credentialAccess==='disabled'||typeof metadata[key]!=='boolean'?null:metadata[key]]));
+   const projections=[(await f.owner.read({uri:'amplifier-media://configuration?scope=host'})).data.voiceConfiguration,(await f.owner.action({channel:'ahp-session:/owned',operation:'voice.configuration'},{account:'owned',clientId:'client'})).result,(await f.post('config')).body];
+   for(const row of projections){for(const [key,value]of Object.entries(expected))assert.equal(row[key],value);assert(!JSON.stringify(row).includes(sentinel))}
+   assert.deepEqual(f.counts,{workers:0,requests:0,secrets:0});
+  }finally{await f.close()}
+ }
+});
+test('installed native environment reuse and private save become effective for explicit preview',{skip:!process.env.MEDIA_NATIVE_ADMIN_MODULE||!process.env.MEDIA_NATIVE_PYTHON},async()=>{
+ const {AdminConnection}=await import(process.env.MEDIA_NATIVE_ADMIN_MODULE);
+ for(const source of ['environment','private']){
+  const directory=await mkdtemp(join(tmpdir(),'media-native-source-')),workspace=join(directory,'workspace'),home=join(directory,'home');await mkdir(workspace);await mkdir(home);
+  const config=join(directory,'native.json');await writeFile(config,JSON.stringify({home,appHome:join(directory,'app'),adminWorkspaceRoots:[workspace],adminVoiceCredentials:true,workerCommand:['/no/model-worker-allowed']}));
+  const admin=new AdminConnection({command:process.env.MEDIA_NATIVE_PYTHON,args:['-I','-B','-m','amplifier_acp','--config',config],cwd:workspace,env:{...process.env,OPENAI_API_KEY:source==='environment'?sentinel:'',AMPLIFIER_VOICE_API_KEY:''},resolveWorkspace:()=>workspace});
+  let resolutions=0,previews=0;const f=await fixture({settings:()=>admin.perform('voice.configuration',{},{clientId:''}),configure:({args})=>admin.perform('voice.configure',args,{clientId:''}),resolveCredential:async()=>{resolutions++;return (await admin.perform('voice.credential',{},{clientId:''})).apiKey},workerFactory:()=>({async request(method,args){assert.equal(method,'preview');assert.equal(args.apiKey,sentinel);previews++;return {model:args.model,voice:args.voice,mimeType:'audio/wav',audio:'Zml4dHVyZQ==' }},close(){}})});
+  try{
+   const initial=(await f.post('config')).body;assert.equal(initial.environmentAvailable,source==='environment');assert.equal(initial.privateKeyAvailable,false);assert.equal(resolutions,0);
+   const saved=await f.post('configure',{source,...(source==='private'?{apiKey:sentinel}:{})});assert.equal(saved.status,200);assert.equal(saved.body.source,source);assert.equal(saved.body.available,true);assert.equal(saved.body.privateKeyAvailable,source==='private');assert.equal(saved.body.environmentAvailable,source==='environment');assert.equal(saved.body.credentialValidation,'not-checked');assert.equal(resolutions,0);
+   assert.deepEqual((await f.post('config')).body,saved.body);
+   const sample=await f.post('preview',{commandId:'one-explicit-sample',model:'gpt-live-1',voice:'marin'});assert.equal(sample.status,200);assert.equal(sample.body.mimeType,'audio/wav');assert.equal(previews,1);assert.equal(resolutions,1);
+  }finally{await f.close();await admin.close();await rm(directory,{recursive:true,force:true})}
+ }
+});
 async function fixture(options={}){const directory=await mkdtemp(join(tmpdir(),'media-availability-'));let workers=0,requests=0,secrets=0;const owner=await createMediaCapability({directory,inspectSession:async()=>({}),delegate:async()=>({}),recordTranscript:async()=>({recorded:true}),settings:async()=>({available:true,credentialAccess:'enabled'}),resolveCredential:async()=>{secrets++;return sentinel},workerFactory:()=>{workers++;return {request:async(method,args)=>{requests++;if(method==='quiescence.acquire')return {held:true,ownerId:args.ownerId,fenceId:args.context.fenceId};if(method==='quiescence.release')return {released:true};throw Object.assign(Error(sentinel),{data:{source:'voice-provider',status:401,executed:false}})},close(){}}},...options});const lease=(await owner.action({channel:'ahp-session:/owned',operation:'media.attach'},{account:'owned',clientId:'client'})).result.lease;
 return {owner,directory,get counts(){return {workers,requests,secrets}},async post(path,args={}){const response=await owner.handleFetch(new Request('http://fixture/media/voice/'+path,{method:'POST',headers:{'X-Amplifier-Media-Lease':lease},body:JSON.stringify(args)}),{account:'owned'});const body=await response.json();assert(!JSON.stringify(body).includes(sentinel));return {status:response.status,body}},async close(){await owner.close();await rm(directory,{recursive:true,force:true})}}}
 for(const [availability,status,settings] of [['disabled',403,{available:false,credentialAccess:'disabled'}],['missing-credentials',409,{available:false,credentialAccess:'enabled'}],['unavailable',503,{}]])test(`${availability} is passive and refuses before worker or credential access`,async()=>{const f=await fixture({settings:async()=>({...settings,reason:sentinel})});try{const config=await f.post('config');assert.equal(config.body.availability,availability);assert.equal(config.body.credentialValidation,'not-checked');for(const path of ['connect','preview']){const result=await f.post(path,{commandId:path,sdp:'v=0'});assert.equal(result.status,status);assert.equal(result.body.executed,false)}assert.deepEqual(f.counts,{workers:0,requests:0,secrets:0});const held=await f.owner.quiescenceParticipant().acquire(fence);assert.ok(held);await held.release('unchanged',{kind:'admission-refused'})}finally{await f.close()}});
