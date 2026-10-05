@@ -64,6 +64,8 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
   let preference;try{preference=await settings(session)}catch{throw voiceFailure('voice_settings_unavailable',false)}preference=preference&&typeof preference==='object'?preference:{};const availability=voiceAvailability(preference),available=availability==='configured',projection=projectPreferences(preference,!!preferences);
   return {...projection,available,availability,credentialValidation:'not-checked',configurable:typeof configure==='function'&&preference.credentialAccess!=='disabled'&&(typeof preference.configurable==='boolean'?preference.configurable:preference.configurable===undefined),
    credentialAccess:['enabled','disabled'].includes(preference.credentialAccess)?preference.credentialAccess:undefined,
+   environmentAvailable:preference.credentialAccess==='disabled'?null:typeof preference.environmentAvailable==='boolean'?preference.environmentAvailable:null,
+   privateKeyAvailable:preference.credentialAccess==='disabled'?null:typeof preference.privateKeyAvailable==='boolean'?preference.privateKeyAvailable:null,
    source:['environment','private'].includes(preference.source)?preference.source:'environment',preferredModel:projection.preferredModel??'gpt-live-1',
    voice:projection.voice??'marin',interruptions:projection.interruptions??true,
    reason:availabilityReason(availability),
