@@ -1,15 +1,22 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
+import {validateMediaStore} from './store-startup.js';
 /** A durable intent spool, never native history authority. Only unattempted
  * adjacent fragments coalesce. SQL indexes keep recovery scoped and bounded. */
 export class TranscriptQueue{
- constructor(path,{record,onRecorded=()=>{},admit=work=>work()}){this.admit=admit;this.record=record;this.onRecorded=onRecorded;this.running=new Map();this.timers=new Map();this.closed=false;this.db=new DatabaseSync(path);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
- CREATE TABLE IF NOT EXISTS intents(seq INTEGER PRIMARY KEY AUTOINCREMENT,session TEXT NOT NULL,call TEXT NOT NULL,item TEXT NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL,append INTEGER NOT NULL,command TEXT NOT NULL UNIQUE,status TEXT NOT NULL,attempted INTEGER NOT NULL DEFAULT 0,created TEXT NOT NULL);
- CREATE INDEX IF NOT EXISTS pending_session ON intents(session,status,seq);
- CREATE INDEX IF NOT EXISTS call_order ON intents(session,call,seq);
- CREATE TABLE IF NOT EXISTS once_intents(command TEXT PRIMARY KEY, signature TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS history(session TEXT NOT NULL,id TEXT NOT NULL,created TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(session,id));
- CREATE INDEX IF NOT EXISTS history_recent ON history(session,created DESC);`);}
+ constructor(path,{record,onRecorded=()=>{},admit=work=>work()}){
+  this.admit=admit;this.record=record;this.onRecorded=onRecorded;this.running=new Map();this.timers=new Map();this.closed=false;
+  const existing=validateMediaStore(path,'transcripts');this.db=new DatabaseSync(path);
+  try{
+   this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL');
+   if(!existing)this.db.exec(`CREATE TABLE intents(seq INTEGER PRIMARY KEY AUTOINCREMENT,session TEXT NOT NULL,call TEXT NOT NULL,item TEXT NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL,append INTEGER NOT NULL,command TEXT NOT NULL UNIQUE,status TEXT NOT NULL,attempted INTEGER NOT NULL DEFAULT 0,created TEXT NOT NULL);`);
+   this.db.exec(`CREATE INDEX IF NOT EXISTS pending_session ON intents(session,status,seq);
+    CREATE TABLE IF NOT EXISTS once_intents(command TEXT PRIMARY KEY, signature TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS call_order ON intents(session,call,seq);
+    CREATE TABLE IF NOT EXISTS history(session TEXT NOT NULL,id TEXT NOT NULL,created TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(session,id));
+    CREATE INDEX IF NOT EXISTS history_recent ON history(session,created DESC);`);
+  }catch(error){this.db.close();throw error;}
+ }
  enqueue(entry){if(this.closed)throw Error('Transcript owner closed.');if(!['user','assistant'].includes(entry.role)||typeof entry.text!=='string'||entry.text.length>65536)throw Error('Invalid bounded voice transcript.');this.db.exec('BEGIN IMMEDIATE');let command;
   try{if(entry.once){
     const signature=JSON.stringify([entry.session,entry.callId,entry.itemId,entry.role,entry.text,!!entry.append]);
@@ -28,6 +35,7 @@ export class TranscriptQueue{
   return {durability:'pending',commandId:command};
  }
  pendingCount(){return Number(this.db.prepare("SELECT count(*) n FROM intents WHERE status='pending'").get().n);}
+ unknownCount(){return Number(this.db.prepare("SELECT count(*) n FROM intents WHERE status='unknown'").get().n);}
  async flush(session){return this.admit(()=>this.flushSelected(session));}
  async flushSelected(session){if(this.closed)return;if(typeof session!=='string')throw Error('Transcript drain requires one explicit session.');if(this.running.has(session))return this.running.get(session);const work=this.drain(session);this.running.set(session,work);try{return await work}finally{this.running.delete(session)}}
  async drain(session){let count=0;const busyCalls=new Set();while(count++<64&&!this.closed){

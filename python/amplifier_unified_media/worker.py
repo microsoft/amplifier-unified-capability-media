@@ -1,15 +1,17 @@
 """Bidirectional JSON-RPC worker. Credentials only transit private stdio, never disk."""
-import asyncio, json, sys, uuid
+import asyncio, json, sys, uuid, hashlib
+from pathlib import Path
 import aiohttp
 from .voice import VoiceCall, VoiceError, ProviderError, API, MODELS
 from .voice_diagnostics import VoiceDiagnostics
 from .voice_options import selected_voice, voices_for
 from .sample import render_sample
 from .voice_visual_image import validate_png
+from .service_lifecycle import service_identity, service_proof
 import base64
 
 class Rpc:
-    def __init__(self): self.pending={}; self.owners={}; self.tasks=set(); self.calls=set(); self.effects=0; self.fence=None; self.released={}
+    def __init__(self): self.pending={}; self.owners={}; self.tasks=set(); self.calls=set(); self.effects=0; self.fence=None; self.released={}; self.live_fence=None; self.admissions={}; self.aborted={}
     def send(self, value): print(json.dumps(value, ensure_ascii=False), flush=True)
     def may_be_idle(self):
         self.send({'jsonrpc':'2.0','method':'quiescence/mayBeIdle','params':{}})
@@ -32,7 +34,8 @@ class Rpc:
         except Exception as error:
             # Provider errors are already sanitized. Never return arbitrary HTTP payloads.
             text=str(error) if isinstance(error,(VoiceError,ValueError)) else 'Media transport failed; the outcome may be unknown.'
-            self.send({'jsonrpc':'2.0','id':identity,'error':{'code':-32000,'message':text[:500]}})
+            details={'source':'voice-provider','status':error.status,**({'executed':False} if getattr(error,'media_not_executed',False) else {})} if isinstance(error,ProviderError) and error.status in (401,403,404,429) else None
+            self.send({'jsonrpc':'2.0','id':identity,'error':{'code':-32000,'message':text[:500],**({'data':details} if details else {})}})
     def work(self):
         self.calls={call for call in self.calls if not call.closed or any(not task.done() for task in call.tasks) or any(task and not task.done() for task in (call.pump,call.observer))}
         return {'effects':self.effects,'owners':len(self.owners),'callbacks':len(self.pending),'callTasks':sum(sum(not task.done() for task in call.tasks) for call in self.calls),'liveCalls':sum(not call.closed for call in self.calls),'transportTasks':sum(sum(bool(task and not task.done()) for task in (call.pump,call.observer)) for call in self.calls)}
@@ -40,34 +43,78 @@ class Rpc:
     def context(args):
         value={key:args.get('context',{}).get(key) for key in ('fenceId','commandId','purpose','instanceId','dataScope')}
         value['ownerId']=args.get('ownerId')
-        if any(not isinstance(v,str) or not 1<=len(v)<=200 or any(ord(c)<32 for c in v) for v in value.values()) or value['purpose'] not in ('distribution-update','recovery'):
+        if any(not isinstance(v,str) or not 1<=len(v)<=200 or any(ord(c)<32 for c in v) for v in value.values()) or value['purpose'] not in ('distribution-update','recovery','service-stop','retention-hide','managed-files-disposal'):
             raise ValueError('Bounded exact media fence context required')
+        if value['purpose']=='service-stop':
+            value['serviceIdentity']=service_identity(args['context'].get('serviceIdentity'))
+            if any(value['serviceIdentity'][key]!=value[key] for key in ('instanceId','dataScope')):raise ValueError('Service identity differs from media worker fence')
         return value
     async def dispatch(self, method, args):
-        if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work()}
+        if method=='runtime.inspect':
+            root=Path(__file__).resolve().parent
+            files={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.iterdir()) if p.is_file() and p.suffix in ('.py','.json')}
+            loaded={name:Path(module.__file__).resolve() for name,module in list(sys.modules.items()) if getattr(module,'__file__',None) and (name.startswith('amplifier_unified_media') or (name=='__main__' and Path(module.__file__).resolve().parent==root))}
+            return {'isolated':bool(sys.flags.isolated),'dontWriteBytecode':bool(sys.dont_write_bytecode),'packageFiles':files,'loadedModules':{name:{'file':p.name,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'withinPackage':p.parent==root} for name,p in sorted(loaded.items())}}
+        if method=='quiescence.inspect':return {'intakeClosed':self.fence is not None,'fence':self.fence,'counts':self.work(),'serviceStop':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'admissionAbort':{'version':1}}
         if method=='quiescence.acquire':
             context=self.context(args);owner=args['ownerId']
             if self.fence:
-                if self.fence['ownerId']!=owner or any(self.fence[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')):raise ValueError('Different media worker fence held')
+                if self.fence['ownerId']!=owner or any(self.fence[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')) or self.fence.get('serviceIdentity')!=context.get('serviceIdentity'):raise ValueError('Different media worker fence held')
                 return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
-            if context['fenceId'] in self.released:raise ValueError('Released fence cannot reacquire')
+            if context['fenceId'] in self.released or context['fenceId'] in self.aborted or context['fenceId'] in self.admissions:raise ValueError('Settled or refused fence cannot reacquire')
             work=self.work()
+            if context['purpose']=='distribution-update':
+                self.admissions[context['fenceId']]={'context':context,'status':'refused' if any(work.values()) else 'held'}
+                while len(self.admissions)>256:self.admissions.pop(next(iter(self.admissions)))
             if any(work.values()):return {'held':False,'executed':False,'counts':work}
-            self.fence={**context,'ownerId':owner};return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
+            self.fence={**context,'ownerId':owner};self.live_fence=context['fenceId'];return {'held':True,'ownerId':owner,'fenceId':context['fenceId']}
+        if method=='quiescence.abortAdmission':
+            context=self.context(args);proof=args.get('proof');keys={'kind','verified','purpose','receiptId','commandId','fenceId','instanceId','dataScope'}
+            if (context['purpose']!='distribution-update' or not isinstance(proof,dict) or set(proof)!=keys
+                    or proof['kind']!='distribution-admission-abort' or proof['verified'] is not True or proof['purpose']!='distribution-update'
+                    or any(proof[key]!=context[key] for key in ('commandId','fenceId','instanceId','dataScope'))
+                    or not isinstance(proof['receiptId'],str) or not 1<=len(proof['receiptId'])<=200 or any(ord(c)<32 for c in proof['receiptId'])):
+                raise ValueError('Exact authenticated distribution admission abort proof required')
+            signature=json.dumps(proof,sort_keys=True,separators=(',',':'),allow_nan=False)
+            prior=self.aborted.get(context['fenceId'])
+            if prior:
+                if prior['context']!=context or prior['signature']!=signature:raise ValueError('Admission abort proof differs from retained proof')
+                return dict(prior['receipt'])
+            attempt=self.admissions.get(context['fenceId'])
+            if not attempt or attempt['context']!=context:raise ValueError('Original media worker admission attempt unavailable; absence is not proof')
+            if any(self.work().values()):raise ValueError('Media worker admission work remains pending')
+            released=self.released.get(context['fenceId'])
+            # A conclusive original unchanged release can precede the distinct
+            # authenticated abort during a partially failed supervisor unwind.
+            if attempt['status']=='held' and released and released['context']==context and released['outcome']=='unchanged':status='released'
+            elif self.fence is not None:
+                if self.fence!=context:raise ValueError('Different media worker fence held')
+                status='released'
+            elif attempt['status']=='refused' and context['fenceId'] not in self.released:status='not-acquired'
+            else:raise ValueError('Original worker hold is no longer authoritatively accounted')
+            receipt={key:context[key] for key in ('ownerId','commandId','fenceId','instanceId','dataScope')}
+            receipt.update(status=status,receiptId='media-worker-admission-abort:'+hashlib.sha256(json.dumps([context,proof],sort_keys=True,separators=(',',':')).encode()).hexdigest())
+            self.aborted[context['fenceId']]={'context':context,'signature':signature,'receipt':receipt}
+            while len(self.aborted)>256:self.aborted.pop(next(iter(self.aborted)))
+            if self.fence==context:self.fence=None;self.live_fence=None
+            return dict(receipt)
         if method=='quiescence.release':
             context=self.context(args);old=self.fence
             if not old:
                 if self.released.get(context['fenceId'])=={'context':context,'outcome':args['outcome'],'proof':args.get('proof')}:return {'released':True,'duplicate':True}
                 raise ValueError('Exact media worker fence required')
-            if old['ownerId']!=args['ownerId'] or any(old[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')):raise ValueError('Different media worker fence')
-            if args['outcome']=='unknown':return {'released':False,'intakeClosed':True}
+            if old['ownerId']!=args['ownerId'] or any(old[key]!=context[key] for key in ('fenceId','commandId','purpose','instanceId','dataScope')) or old.get('serviceIdentity')!=context.get('serviceIdentity'):raise ValueError('Different media worker fence')
+            if args['outcome']=='unknown':
+                self.live_fence=None
+                return {'released':False,'intakeClosed':True}
             proof=args.get('proof') or {};outcome=args['outcome']
-            refused=proof=={'kind':'admission-refused'} and outcome=='unchanged'
+            refused=proof=={'kind':'admission-refused'} and outcome=='unchanged' and (old['purpose'] not in {'service-stop','managed-files-disposal'} or self.live_fence==old['fenceId'])
+            if old['purpose']=='service-stop' and not refused:proof=service_proof(proof,old,outcome)
             verified=proof.get('verified') is True and all(proof.get(key)==old[key] for key in ('fenceId','commandId','dataScope')) and proof.get('outcome')==outcome and outcome in ('ready','unchanged') and bool(proof.get('receiptId')) and bool(proof.get('instanceId')) and ((proof['instanceId']==old['instanceId'])==(outcome=='unchanged'))
             if not refused and not verified:raise ValueError('Exact verified media worker release proof required')
             self.released[context['fenceId']]={'context':context,'outcome':args['outcome'],'proof':args.get('proof')}
             while len(self.released)>256:self.released.pop(next(iter(self.released)))
-            self.fence=None;return {'released':True}
+            self.fence=None;self.live_fence=None;return {'released':True}
         if self.fence:raise ValueError('Media worker intake closed for quiescence; no new effect admitted')
         self.effects+=1
         try:return await self.execute(method,args)
@@ -102,7 +149,8 @@ class Rpc:
                 result=await call.create(sdp,provider)
                 await owner.set_voice_status({'status':'connecting',**{k:v for k,v in result.items() if k!='sdp'}})
                 return result
-            except Exception:
+            except Exception as error:
+                if isinstance(error,ProviderError) and not getattr(owner.call,'id','') and error.status in (401,403,404,429):error.media_not_executed=True
                 if owner.call: await owner.call.close()
                 self.owners.pop(lease,None); await owner.http.close(); raise
             finally:
