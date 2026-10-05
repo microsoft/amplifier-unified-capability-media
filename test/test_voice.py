@@ -141,3 +141,29 @@ async def test_oversized_spoken_request_is_not_silently_submitted_in_part():
     assert o.delegate.await_count==0
     assert len(c.user_fragments)==512
     assert 'No new work was submitted' in ''.join(e['content'] for e in s.sent)
+
+async def test_delegation_uses_selected_context_without_a_fallible_history_refresh():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    o.inspect=AsyncMock(side_effect=RuntimeError('unindexed ordering boundary'))
+    o.context['messages']=[{'role':'assistant','text':'Previous result','via':'call','voiceItemId':'prior'}]
+    await c.record('user','Make a 3D demo','u')
+    await c.delegate_live('d')
+    o.inspect.assert_not_awaited()
+    o.delegate.assert_awaited_once()
+    assert o.delegate.call_args.args==('Make a 3D demo',)
+    assert o.delegate.call_args.kwargs['delivery']['context']==[{'role':'assistant','text':'Previous result'}]
+
+async def test_delegation_failure_records_identity_without_private_error_text(tmp_path):
+    import json
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    m.protocol_diagnostics=VoiceDiagnostics(tmp_path)
+    o.delegate.side_effect=ConnectionError('PRIVATE transcript fixture-secret')
+    await c.record('user','Make a demo','u')
+    await c.delegate_live('d')
+    records=[json.loads(line) for line in (tmp_path/'voice-diagnostics/events.jsonl').read_text().splitlines()]
+    failed=next(row for row in records if row['type']=='local.request_failed')
+    assert failed['delegation_id']=='d' and failed['status']=='unknown'
+    assert failed['error']['type']=='ConnectionError'
+    assert 'PRIVATE' not in json.dumps(records)+json.dumps(s.sent)
+    assert o.delegate.await_count==1
+    assert 'Do not claim work is running' in s.sent[-1]['content']

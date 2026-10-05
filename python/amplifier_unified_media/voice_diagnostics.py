@@ -19,7 +19,7 @@ TRACE_TYPES = {
     'session.thinking.appended', 'session.commentary.appended',
     'conversation.item.create', 'response.create',
     'local.delegation', 'local.request', 'local.result', 'local.result_forwarded',
-    'local.transcript_unavailable', 'local.result_after_hangup',
+    'local.transcript_unavailable', 'local.result_after_hangup', 'local.request_failed',
 }
 
 
