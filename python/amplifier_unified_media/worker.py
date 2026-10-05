@@ -138,7 +138,8 @@ class Owner:
     async def callback(self,name,**args): return await self.rpc.callback(name,{'lease':self.lease,'session':self.session,'clientId':self.client_id,**args})
     async def admit(self): return await self.callback('admit')
     async def inspect(self): self.context=await self.callback('inspect'); return self.context
-    async def delegate(self,text,command_id): return await self.callback('delegate',text=text,commandId=command_id)
+    async def delegate(self,text,command_id,delivery=None): return await self.callback('delegate',text=text,commandId=command_id,delivery=delivery)
+    async def record_delivery(self,input_id): return await self.callback('delivery',inputId=input_id)
     async def record_voice_transcript(self,role,text,**args): return await self.callback('transcript',role=role,text=text,callId=args['voice_id'],itemId=args['item_id'],append=args.get('append',False))
     async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed',**_): return await self.callback('usage',callId=call_id,responseId=response_id,model=model,usage=usage,phase=phase)
     async def set_voice_status(self,status): return await self.callback('status',status=status)

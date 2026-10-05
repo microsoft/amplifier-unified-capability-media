@@ -43,3 +43,25 @@ async def test_bounded_context_has_no_private_ui_or_estate():
     text=compact_context({'title':'Chosen','sessions':[{'title':'SECRET'}],'view':{'draft':'PRIVATE'},'messages':[{'text':'x'*10000,'role':'user'}]*100},'s');assert 'SECRET' not in text and 'PRIVATE' not in text;assert len(text)<6000
 async def test_completion_speech_cannot_execute_tools():
     c,o,s,m=call();c.id='rtc';c.provider='realtime';c.socket=s;c.realtime_pending_response=True;await c.flush_realtime_response();assert s.sent[0]['response']['tool_choice']=='none';c.closed=True
+async def test_live_seeds_roles_and_delegates_plain_user_text_with_identity():
+    c,o,s,m=call()
+    o.context['messages']=[{'role':'user','text':'Good morning','via':'call'},{'role':'assistant','text':'Hello!','via':'call'}]
+    await c.create('v=0','live')
+    config=m.request.call_args.kwargs['json']['session']
+    assert [row['role'] for row in config['input']]==['user','assistant']
+    await c.record('user','What can you help with?','spoken-one')
+    await c.delegate_live('delegation-one')
+    args=o.delegate.call_args
+    assert args.args==('What can you help with?',)
+    assert args.kwargs['delivery']['sourceItemIds']==['spoken-one']
+    assert args.kwargs['delivery']['context'][0]['text']=='Good morning'
+    c.final.set();await c.close()
+
+async def test_typed_result_retries_only_known_busy_and_speaks_once():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    o.record_delivery=AsyncMock(side_effect=[{'recorded':False,'reason':'busy','retryable':True,'executed':False},{'recorded':True}])
+    snapshot={'generations':[{'event':'generation.finished','generation_id':'typed-one','input_ids':['typed-one'],'response':'An answer'}]}
+    await c.announce_generations(snapshot);await c.announce_generations(snapshot)
+    assert o.record_delivery.await_count==2 and len(s.sent)==1
+    assert 'typed-one' in c.delivered_generations
+    c.closed=True
