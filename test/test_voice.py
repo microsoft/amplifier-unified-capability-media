@@ -25,7 +25,10 @@ def call():
 @pytest.mark.parametrize('provider',['live','realtime'])
 async def test_preserved_provider_transport_and_only_delegation_tool(provider):
     c,o,s,m=call();result=await c.create('v=0',provider);assert result['model']==MODELS[provider];assert o.admit.await_count==1
-    if provider=='live':assert m.request.call_args.kwargs['json']['session']['delegation']=={'type':'client'}
+    if provider=='live':
+        config=m.request.call_args.kwargs['json']['session']
+        assert config['delegation']=={'type':'client'}
+        assert all(label in config['instructions'] for label in ('Backchannel policy:', 'Interruption policy:', 'Delegation policy:', 'Do not delegate to the backend when:', 'omit greetings already exchanged'))
     else:assert m.request.call_args.args==('POST','/realtime/calls')
     c.final.set();await c.close()
 async def test_transcript_dedupe_without_prompt_execution():
