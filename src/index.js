@@ -23,7 +23,9 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
   if(configuring||startingMedia||[...leases.values()].some(item=>item.voice.id&&!['ended','error'].includes(item.voice.status)))throw Object.assign(Error('End active calls and voice previews before changing shared voice defaults.'),{data:{executed:false,reason:'media-active'}});
   configuring=true;try{return await voicePreferences(operation,args,context)}finally{configuring=false}
  },()=>{revision++;onChanged('voice-preferences','host')}):undefined}catch(error){quiescence.close();throw error}
- const settleCall=(lease,result)=>{if(lease.voice.id)quiescence.call(lease.id,result?.finalized===true?null:'unverified');};
+ // Worker retirement or repeated cleanup cannot revoke provider finalization.
+ // A new connect replaces lease.voice and starts a fresh lifetime below.
+ const settleCall=(lease,result)=>{if(lease.voice.id){lease.voice.finalized=lease.voice.finalized===true||result?.finalized===true;quiescence.call(lease.id,lease.voice.finalized?null:'unverified');}};
  const persist=async(key,value)=>{const file=join(directory,'receipts',digest(key)+'.json'),tmp=file+'.'+randomUUID();await writeFile(tmp,JSON.stringify(value),{mode:0o600});await rename(tmp,file)};
  const load=async key=>{try{return JSON.parse(await readFile(join(directory,'receipts',digest(key)+'.json'),'utf8'))}catch(error){if(error.code==='ENOENT')return null;throw error}};
  const changed=session=>{revision++;onChanged('voice',session)};const transcriptQueue=new TranscriptQueue(join(directory,'transcript-intents.sqlite'),{record:recordTranscript,onRecorded:changed,admit:work=>quiescence.effect(work)});await chmod(join(directory,'transcript-intents.sqlite'),0o600);const flushTranscripts=session=>transcriptQueue.flush(session);
@@ -45,7 +47,7 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
   delivery:async args=>{const lease=await callbackLease(args);if(!recordDelivery)return {recorded:false,reason:'unsupported'};const result=await recordDelivery({session:lease.session,callId:lease.voice.id,inputId:args.inputId,commandId:`voice-delivery:${lease.voice.id}:${args.inputId}`});if(result.recorded)changed(lease.session);return result;},
   transcript:async args=>{const lease=await callbackLease(args);return transcriptQueue.enqueue({session:lease.session,callId:args.callId,itemId:args.itemId,role:args.role,text:args.text,append:!!args.append,commandId:`media-transcript:${lease.id}:${++lease.transcriptSequence}`})},
   usage:async args=>{const lease=await callbackLease({...args,operation:'usage'});return recordUsage({...args,session:lease.session})},
-  status:async args=>{const lease=await callbackLease({...args,operation:'status'});lease.voice={...lease.voice,...args.status};if(args.status.status==='ended')settleCall(lease,args.status);return {}},
+  status:async args=>{const lease=await callbackLease({...args,operation:'status'});if(args.status.status==='ended')settleCall(lease,args.status);lease.voice={...lease.voice,...args.status,finalized:lease.voice.finalized===true||args.status.finalized===true};return {}},
  }).map(([name,callback])=>[name,args=>name==='inspect'?callback(args):quiescence.effect(()=>callback(args))]))});
  async function effect(lease,id,operation,payload,run,saveResult=false){
   if(typeof id!=='string'||id.length>240)throw fail('A bounded durable commandId is required.',400);
@@ -158,7 +160,7 @@ export async function createMediaCapability({directory,inspectSession,delegate,r
    return Response.json(result,{headers:{'Cache-Control':'no-store'}});
   }catch(error){return Response.json({error:error.message,code:'media_error'},{status:error.status||502,headers:{'Cache-Control':'no-store'}})}
  }
- async function endLease(lease){if(worker&&lease.voice.id){try{settleCall(lease,await worker.request('end',{lease:lease.token,id:lease.voice.id}));}catch{quiescence.call(lease.id,'unverified');}}}
+ async function endLease(lease){if(worker&&lease.voice.id&&!lease.voice.finalized){try{settleCall(lease,await worker.request('end',{lease:lease.token,id:lease.voice.id}));}catch{settleCall(lease,{finalized:false});}}}
  const timer=setInterval(()=>{void quiescence.effect(async()=>{for(const [token,lease]of leases)if(lease.expiresAt<Date.now()){lease.unsubscribe?.();lease.grants.clear();await endLease(lease);leases.delete(token);for(const [key,value]of owners)if(value===lease)owners.delete(key);}}).catch(()=>{});},10000);timer.unref();
  async function frameAttachment(frame){const bytes=await readFile(join(directory,'frames',frame.id+'.png'));return [{type:'embeddedResource',data:bytes.toString('base64'),contentType:'image/png',displayName:'Explicit screen snapshot'}];}
  const resourceProvider={scheme:'amplifier-media',async read(params){const url=new URL(params.uri),session=cleanSession(url.searchParams.get('session'));await inspectSession(session);const id=url.pathname.slice(1);if(url.hostname!=='frames'||!/^[-a-f0-9]{36}$/.test(id))throw fail('Unknown frame.');const row=JSON.parse(await readFile(join(directory,'frames',id+'.json'),'utf8'));if(row.session!==session||row.hash!==url.searchParams.get('sha256'))throw fail('Frame scope mismatch.',403);const bytes=await readFile(join(directory,'frames',id+'.png'));if(createHash('sha256').update(bytes).digest('hex')!==row.hash)throw fail('Frame content changed.');return {data:bytes.toString('base64'),encoding:'base64',contentType:'image/png'};}};

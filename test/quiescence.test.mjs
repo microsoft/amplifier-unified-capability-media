@@ -53,6 +53,30 @@ test('unknown provider call lifetime is distinct from an old command receipt and
  }finally{await f.close();await rm(directory,{recursive:true,force:true});}
 });
 
+test('confirmed provider close survives repeated cleanup; a new call requires its own confirmation',async()=>{
+ let ends=0;const f=await fixture({workerFactory:()=>({async request(method){if(method==='connect')return {id:'call-one'};if(method==='end')return {closed:true,finalized:++ends===1};return {};},async close(){}})});
+ try{
+  const lease=await f.attach();await f.post(lease,'voice/connect',{commandId:'one',sdp:'v=0'});
+  await f.post(lease,'voice/end',{id:'call-one'});await f.post(lease,'voice/end',{id:'call-one'});
+  assert.equal(f.owner.inspectQuiescence().unverifiedCalls,0);
+  await f.post(lease,'voice/connect',{commandId:'two',sdp:'v=0'});
+  await f.post(lease,'voice/end',{id:'call-one'});
+  assert.equal(f.owner.inspectQuiescence().unverifiedCalls,1);
+ }finally{await f.close();}
+});
+
+test('provider close callback remains authoritative when a retired worker cannot confirm again',async()=>{
+ let callbacks;const f=await fixture({workerFactory:options=>{callbacks=options.callbacks;return {async request(method){return method==='connect'?{id:'call-one'}:{closed:true,finalized:false}},async close(){}}}});
+ try{
+  const lease=await f.attach();await f.post(lease,'voice/connect',{commandId:'one',sdp:'v=0'});
+  await callbacks.status({lease,session,clientId:'one',status:{status:'ended',finalized:true}});
+  await callbacks.status({lease,session,clientId:'one',status:{status:'ended',finalized:false}});
+  await f.post(lease,'voice/end',{id:'call-one'});
+  assert.equal(f.owner.inspectQuiescence().unverifiedCalls,0);
+  await f.owner.disconnect('one');assert.equal(f.owner.inspectQuiescence().unverifiedCalls,0);
+ }finally{await f.close();}
+});
+
 test('actual owner process death retains unknown gate and exact proof releases without recreating media',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'media-gate-crash-')),c=context('crashed');
  const module=new URL('../src/index.js',import.meta.url).href;
