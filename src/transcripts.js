@@ -7,10 +7,17 @@ export class TranscriptQueue{
  CREATE TABLE IF NOT EXISTS intents(seq INTEGER PRIMARY KEY AUTOINCREMENT,session TEXT NOT NULL,call TEXT NOT NULL,item TEXT NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL,append INTEGER NOT NULL,command TEXT NOT NULL UNIQUE,status TEXT NOT NULL,attempted INTEGER NOT NULL DEFAULT 0,created TEXT NOT NULL);
  CREATE INDEX IF NOT EXISTS pending_session ON intents(session,status,seq);
  CREATE INDEX IF NOT EXISTS call_order ON intents(session,call,seq);
+ CREATE TABLE IF NOT EXISTS once_intents(command TEXT PRIMARY KEY, signature TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS history(session TEXT NOT NULL,id TEXT NOT NULL,created TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(session,id));
  CREATE INDEX IF NOT EXISTS history_recent ON history(session,created DESC);`);}
  enqueue(entry){if(this.closed)throw Error('Transcript owner closed.');if(!['user','assistant'].includes(entry.role)||typeof entry.text!=='string'||entry.text.length>65536)throw Error('Invalid bounded voice transcript.');this.db.exec('BEGIN IMMEDIATE');let command;
-  try{const previous=this.db.prepare('SELECT * FROM intents WHERE session=? AND call=? ORDER BY seq DESC LIMIT 1').get(entry.session,entry.callId);
+  try{if(entry.once){
+    const signature=JSON.stringify([entry.session,entry.callId,entry.itemId,entry.role,entry.text,!!entry.append]);
+    const old=this.db.prepare('SELECT signature FROM once_intents WHERE command=?').get(entry.commandId);
+    if(old){if(old.signature!==signature)throw Error('Transcript result identity changed.');this.db.exec('COMMIT');return {durability:'saved',commandId:entry.commandId,duplicate:true};}
+    this.db.prepare('INSERT INTO once_intents VALUES(?,?)').run(entry.commandId,signature);
+   }
+   const previous=this.db.prepare('SELECT * FROM intents WHERE session=? AND call=? ORDER BY seq DESC LIMIT 1').get(entry.session,entry.callId);
    if(previous&&previous.item===entry.itemId&&previous.role===entry.role&&previous.status==='pending'&&!previous.attempted&&(!entry.append||previous.text.length+entry.text.length<=65536)){
     command=previous.command;this.db.prepare('UPDATE intents SET text=?,append=? WHERE seq=?').run(entry.append?previous.text+entry.text:entry.text,entry.append?previous.append:0,previous.seq);
    }else{command=entry.commandId||'media-transcript:'+randomUUID();this.db.prepare('INSERT INTO intents(session,call,item,role,text,append,command,status,created) VALUES(?,?,?,?,?,?,?,\'pending\',?)').run(entry.session,entry.callId,entry.itemId,entry.role,entry.text,entry.append?1:0,command,new Date().toISOString());}

@@ -18,6 +18,8 @@ TRACE_TYPES = {
     'session.thinking.append', 'session.commentary.append', 'session.close',
     'session.thinking.appended', 'session.commentary.appended',
     'conversation.item.create', 'response.create',
+    'local.delegation', 'local.request', 'local.result', 'local.result_forwarded',
+    'local.transcript_unavailable', 'local.result_after_hangup',
 }
 
 
@@ -42,7 +44,7 @@ class VoiceTrace:
         self.sequence += 1
         self.events.append({'at': time.time(), 'sequence': self.sequence, 'direction': direction,
                             **{key: identifier(event[key], secret) for key in
-                               ('type', 'event_id', 'client_event_id') if key in event}})
+                               ('type', 'event_id', 'client_event_id', 'delegation_id', 'generation_id', 'status') if key in event}})
 
 
 class VoiceDiagnostics:
@@ -55,7 +57,8 @@ class VoiceDiagnostics:
             return
         secret = call.manager.api_key
         fields = {key: identifier(event[key], secret) for key in
-                  ('type', 'event_id', 'client_event_id', 'reason') if key in event}
+                  ('type', 'event_id', 'client_event_id', 'reason', 'delegation_id', 'generation_id', 'status') if key in event}
+        fields.update({key: event[key] for key in ('offset_ms', 'request_revision', 'item_count') if type(event.get(key)) in (int, float) and 0 <= event[key] < 1e12})
         row = {'at': time.time(), 'provider': call.provider,
                'callId': identifier(call.id, secret), 'sessionId': identifier(call.session_id, secret),
                'closing': call.closing, 'closed': call.closed, 'finalized': call.final.is_set(),

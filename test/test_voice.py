@@ -65,3 +65,79 @@ async def test_typed_result_retries_only_known_busy_and_speaks_once():
     assert o.record_delivery.await_count==2 and len(s.sent)==1
     assert 'typed-one' in c.delivered_generations
     c.closed=True
+
+async def test_delegation_offset_does_not_consume_a_later_question():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    await c.record('user','Check tools','u1',delta=True,start=10,at=100)
+    await c.record('user','Now file feedback','u2',delta=True,start=300,at=400)
+    await c.delegate_live('first',200)
+    assert o.delegate.call_args.args==('Check tools',)
+    assert o.delegate.call_args.kwargs['delivery']['sourceItemIds']==['u1']
+    await c.delegate_live('second',500)
+    assert o.delegate.call_args.args==('Now file feedback',)
+    assert o.delegate.await_count==2
+
+async def test_late_answer_requests_durable_fallback_without_speech():
+    c,o,s,m=call();c.id='live-one';c.socket=s;wait=asyncio.Event()
+    o.record_result_fallback=AsyncMock()
+    async def delegated(*args,**kwargs):
+        await wait.wait()
+        return {'text':'Saved answer','generation_id':'turn','completed':True,'status':'completed'}
+    o.delegate.side_effect=delegated
+    await c.record('user','Check tools','u')
+    task=asyncio.create_task(c.delegate_live('d'));await asyncio.sleep(0)
+    c.closed=True;wait.set();await task
+    o.record_result_fallback.assert_awaited_once_with('voice:live-one:d')
+    assert not s.sent
+
+def test_context_retains_facts_and_is_always_parseable():
+    import json
+    context={'title':'t'*10000,'activity':{'status':'working','activeTurnId':'turn','executionRevision':7,'private':'secret'},'selection':[{'id':'model','value':'Astra'}],
+             'capabilities':{'actions':['feedback.submit','feedback.receipt'],'secret':'private'},'messages':[{'role':'user','text':'x'*10000}]*40}
+    data=json.loads(compact_context(context,'session'))
+    assert data['activity']=={'status':'working','activeTurnId':'turn','executionRevision':7}
+    assert data['selection'][0]['value']=='Astra'
+    assert 'feedback.submit' in data['capabilities']['actions']
+    assert data['capabilities']['nativeTools']=='not-inspected'
+    assert 'private' not in json.dumps(data)
+
+def test_pending_outcome_never_reads_progress_as_success():
+    from amplifier_unified_media.voice import result_text
+    value=result_text({'completed':False,'status':'dispatching','workContinues':True,'text':'I filed it'})
+    assert 'still running' in value and 'I filed it' not in value
+
+async def test_answered_exchange_is_reference_not_repeated_request():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    await c.record('user','What tools do you have?',delta=True,start=0,at=100)
+    await c.record('assistant','I can check the current tools.',delta=True,start=150,at=200)
+    await c.record('user','Please check.',delta=True,start=250,at=350)
+    await c.delegate_live('d',400)
+    assert o.delegate.call_args.args==('Please check.',)
+    reference=o.delegate.call_args.kwargs['delivery']['context']
+    assert reference==[{'role':'user','text':'What tools do you have?'},{'role':'assistant','text':'I can check the current tools.'}]
+
+async def test_completed_result_survives_failed_voice_delivery_without_replay():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    o.record_result_fallback=AsyncMock()
+    o.delegate.return_value={'text':'Saved answer','generation_id':'turn','completed':True,'status':'completed'}
+    s.send_json=AsyncMock(side_effect=ConnectionError('closed'))
+    await c.record('user','Check tools','u')
+    await c.delegate_live('d')
+    assert o.delegate.await_count==1
+    o.record_result_fallback.assert_awaited_once_with('voice:live-one:d')
+
+def test_capability_catalog_does_not_evict_recent_conversation():
+    import json
+    context={'messages':[{'role':'user','text':'Already greeted'},{'role':'assistant','text':'Already answered'}],
+        'capabilities':{'nativeTools':'inspected','tools':[{'name':str(i),'description':'x'*120} for i in range(48)],'actions':['x'*100]*80}}
+    data=json.loads(compact_context(context,'session'))
+    assert data['recent_messages']==context['messages']
+    assert len(json.dumps(data,ensure_ascii=False))<=5900
+
+async def test_oversized_spoken_request_is_not_silently_submitted_in_part():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    for i in range(513):await c.record('user','word ','u',delta=True,start=i,at=i+1)
+    await c.delegate_live('d',600)
+    assert o.delegate.await_count==0
+    assert len(c.user_fragments)==512
+    assert 'No new work was submitted' in ''.join(e['content'] for e in s.sent)

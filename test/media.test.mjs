@@ -39,3 +39,17 @@ test('detach revokes device grants without cancelling admitted agent work',async
 test('body limits and unavailable native adapter remain explicit',async()=>{const f=await fixture();try{const lease=await f.attach();assert.equal((await f.post(lease,'voice/connect',{sdp:'x'.repeat(750001)})).status,413);const native=(await f.post(lease,'computer/visual/native/status')).body;assert.equal(native.available,false);assert.equal(native.host.label,'This host')}finally{await f.close()}});
 
 test('voice settings exclude active calls, previews, and concurrent media startup',async()=>{let configured=0,release;const f=await fixture({configure:async()=>{configured++;return {}},workerFactory:()=>({request:async(method)=>{if(method==='preview')await new Promise(resolve=>{release=resolve});return method==='connect'?{id:'active'}:{}},close(){}})});try{const a=await f.attach(),b=await f.attach('b');const preview=f.post(a,'voice/preview',{commandId:'preview'});while(!release)await new Promise(resolve=>setTimeout(resolve,1));assert.equal((await f.post(b,'voice/configure',{})).status,409);release();await preview;assert.equal((await f.post(b,'voice/configure',{})).status,200);await f.post(a,'voice/connect',{commandId:'connect'});assert.equal((await f.post(b,'voice/configure',{})).status,409);await f.post(a,'voice/end');assert.equal((await f.post(b,'voice/configure',{})).status,200);assert.equal(configured,2);}finally{await f.close()}});
+
+test('late delegated results enter canonical transcript once without replay, even after detach',async()=>{
+ let release,delegated=0;const records=[];
+ const f=await fixture({delegate:async()=>{delegated++;await new Promise(resolve=>{release=resolve});return {completed:true,generation_id:'generation',text:'Verified final answer'}},recordTranscript:async row=>{records.push(row);return {recorded:true,text:row.text}}});
+ try{
+  const lease=await f.attach();await f.post(lease,'voice/connect',{commandId:'connect',sdp:'v=0'});
+  const args={lease,session,clientId:'a',commandId:'voice:call-a:delegation',text:'Do work',delivery:{version:1,callId:'call-a',sourceItemIds:['utterance']}};
+  const work=f.callbacks.delegate(args);while(!release)await new Promise(resolve=>setTimeout(resolve,1));
+  await f.provider.disconnect('a');release();await work;
+  await f.callbacks.fallback(args);await f.provider.flushTranscripts(session);await f.callbacks.fallback(args);await f.provider.flushTranscripts(session);
+  assert.equal(delegated,1);assert.equal(records.length,1);assert.equal(records[0].text,'Verified final answer');assert.equal(records[0].callId,'call-a');
+  assert.equal((await f.callbacks.fallback({...args,commandId:'not-admitted'})).recorded,false);
+ }finally{await f.close()}
+});
