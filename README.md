@@ -216,7 +216,7 @@ not inferred or rewritten into verified release evidence.
 The optional `voicePreferences(operation, args, context)` callback enables one
 host-scoped `voice-preferences` topic (`amplifier-media://voice-preferences`) and
 two ordinary capability actions. The topic's data is
-`{voicePreferences: {preferredModel, fallbackModel, voice, interruptions,
+`{voicePreferences: {preferredModel, fallbackModel, voice, interruptions, fallbackVoice?,
 preferencesRevision, preferenceFields, models, fallbackBehavior}}`. Model metadata
 and voice choices are explicitly bounded and sanitized. Existing `voiceConfiguration`
 reads also retain these fields; the host topic is the live shared-defaults watch
@@ -259,8 +259,15 @@ the other's complete lifetime proof. Local receipts live in
 `voice-preferences.sqlite`, an independent product store; current selected-native
 archives do not include it implicitly.
 
-`fallbackBehavior: "stored-only"` is intentional: the retained transport does not
-perform automatic fallback. Saving that legacy field does not claim it does.
+`fallbackBehavior: "on-model-unavailable"` is supplied by this media owner.
+Automatic calls may try one different configured fallback after a conclusive
+model/access rejection (403/404 or recognized model/endpoint 400) before a call
+ID exists. Admission is checked again. Authentication, rate limits, unknown
+transport failures and allocated calls never trigger fallback. Empty fallbackModel
+disables it. Optional fallbackVoice chooses a compatible voice; empty uses the
+preferred voice when compatible, otherwise Marin. The result and status report
+actual model/voice, preferredModel and a fixed fallbackReason; status excludes SDP.
+There is no mid-call failover or replay of unknown calls.
 Offline fixture and installed ACP qualification establish settings behavior, not
 real voice-account, microphone, speaker, or browser acceptance.
 
@@ -378,7 +385,8 @@ to pack and install this owner in separate Node/Python consumers, compare every
 packaged implementation file with source, and run the relocated suites. Missing
 native peers remain visible skips. `test_voice_defaults.py` exercises the actual
 worker's model selection with a no-network call fixture: future defaults apply,
-and a failed preferred model does not attempt automatic fallback.
+and unknown failures do not attempt fallback. The fallback and transport suites
+also verify the one configured alternative, fence refusal and actual payloads.
 
 These checks do not qualify browser gestures, microphone/camera/speaker, native
 screen permission, real audio, provider accounts, OS service stop or deployed

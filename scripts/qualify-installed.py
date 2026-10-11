@@ -32,7 +32,7 @@ for file in (source/'test').iterdir():
 # coordinator are executed read-only via environment pointers, never installed here.
 pythonHome=out/'python';run(['uv','venv','--python',args.python,str(pythonHome)],out,'venv.log')
 python=pythonHome/'bin/python';run(['uv','pip','install','--python',str(python),str(wheel),'aiohttp>=3.12,<4','pytest>=8','pytest-asyncio>=0.24'],out,'install-python.log')
-env['MEDIA_CAPABILITY_MODULE']=(package/'src/index.js').as_uri();env['MEDIA_WORKER_PYTHON']=str(python);env['MEDIA_WORKER_WHEEL']=str(wheel);env['MEDIA_RUNTIME_RECEIPT']=str(out/'installed-runtime-receipt.json');env['MEDIA_ACCEPTANCE_RECEIPT']=str(out/'native-transcript-receipt.json')
+env['MEDIA_CAPABILITY_MODULE']=(package/'src/index.js').as_uri();env['MEDIA_STARTUP_MODULE_ROOT']=(package/'src').as_uri()+'/';env['MEDIA_WORKER_PYTHON']=str(python);env['MEDIA_WORKER_WHEEL']=str(wheel);env['MEDIA_RUNTIME_RECEIPT']=str(out/'installed-runtime-receipt.json');env['MEDIA_ACCEPTANCE_RECEIPT']=str(out/'native-transcript-receipt.json')
 run(['node','--test',*[str(p) for p in sorted(tests.glob('*.mjs'))]],consumer,'installed-node-tests.log')
 run([str(python),'-m','pytest','-q','--import-mode=importlib','-o','asyncio_mode=auto',str(tests)],consumer,'installed-python-tests.log')
 installed=Path(run([str(python),'-c','import amplifier_unified_media; print(amplifier_unified_media.__path__[0])'],consumer,'python-import.log').strip())

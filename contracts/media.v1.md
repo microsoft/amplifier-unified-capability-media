@@ -93,6 +93,9 @@ retains its earlier 2026-10-02 revision and is not current complete acceptance.
 Physical mic/camera/speaker, native screen permission, real-provider account/audio,
 F02.04 browser gestures, prior-provider-lifetime reconciliation, whole configured
 service replacement and deployed adoption are unqualified. Automatic fallback
-is unsupported (`stored-only`). These are gaps/limits separate from the desired
+is bounded to one configured alternative after a conclusive pre-call model
+rejection with renewed admission. Authentication, limits, uncertain outcomes and
+allocated calls never switch. Result/status report the actual model and voice.
+Offline transport checks do not qualify real-account fallback. These are limits separate from the desired
 promises. Novel cross-owner behavior requires an explicit reviewed proposal;
 this packet proposes none and grants no recording/capture/provider scenario.

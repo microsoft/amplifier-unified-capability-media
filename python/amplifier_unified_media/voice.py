@@ -117,6 +117,7 @@ class VoiceCall:
         self.transfer_id = None
         self.id = ""
         self.provider = "live"
+        self.voice_name = "marin"
         self.socket: Any = None
         self.pump: asyncio.Task | None = None
         self.observer: asyncio.Task | None = None
@@ -185,7 +186,7 @@ class VoiceCall:
         except Exception as exc:
             await self.close()
             raise VoiceError("The voice session was created, but its backend connection failed. Try the call again.") from exc
-        return {"id": self.id, "sdp": answer, "provider": provider, "model": MODELS[provider], "sessionId": self.session_id}
+        return {"id": self.id, "sdp": answer, "provider": provider, "model": MODELS[provider], "voice": self.voice_name, "sessionId": self.session_id}
 
     async def send(self, event: dict) -> None:
         if self.closed or not self.socket or self.socket.closed:

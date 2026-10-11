@@ -9,7 +9,7 @@ The public fixtures reproduce:
 
 - Apply new defaults after a confirmed hangup; established calls and previews
   exclude preference writes. Actual Python worker selection consumes supplied
-  defaults and never claims automatic fallback.
+  defaults. The later bounded fallback successor is described below.
 - Capture an explicitly granted synthetic frame, revoke or replace its grant,
   then delegate. No old frame is attached. Other clients/conversations cannot
   retrieve the capture result or seize its next-frame selection.
@@ -34,8 +34,7 @@ this owner's receipt does not broaden it to native Core source-main acceptance.
 
 Physical devices, authenticated audio/providers, browser gestures, external
 provider-lifetime reconciliation, process supervisor replacement and deployed
-adoption remain explicit unverified boundaries. Automatic fallback remains
-`stored-only`. There is no new camera, recording or device permission feature.
+adoption remain explicit unverified boundaries. The original snapshot did not implement automatic fallback. There is no new camera, recording or device permission feature.
 
 ## Call lifetime and offline voice parity successor
 
@@ -50,7 +49,7 @@ provider effect. Exact old command receipts still precede fresh preflight.
 startup, known provider refusal, maintenance exclusion and confirmed hangup.
 [Transport tests](../test/test_voice_transport.py) run actual RPC and VoiceCall
 code with only HTTP/WebSocket replaced offline: both protocols receive saved
-voices, future realtime calls receive changed interruption defaults, 404 does
+voices, future realtime calls receive changed interruption defaults, the original 404 behavior did
 not cause fallback, and speech interruption/hangup preserve accepted delegation
 and final Unicode transcript callbacks. Live's interruption preference remains
 stored; its existing transport has no equivalent interruption field.
@@ -67,8 +66,19 @@ catalog also lists `microsoft/amplifier-voice` and
 `robotdad/amplifier-app-voice`; these are separate products, not configured
 dependencies. Their installed runtime behavior is outside this qualification.
 The guard belongs to this media owner's lease/maintenance storage, rather than
-those products or native session ownership. No automatic fallback is introduced.
+those products or native session ownership. That snapshot introduced no automatic fallback.
 
 ## Retained transcript delivery and maintenance
 
 M2/M3/M7 regression: after an actual transcript callback loses its native acknowledgement and a provider call is conclusively finalized, the Node owner reports `unknownTranscripts` separately from `pendingTranscripts`. Recovery, update, retention, managed-file disposal and service-stop acquisition refuse before worker acquisition. Cold restart preserves the exact retained intent and never retries it. Pending delivery also refuses; confirmed native delivery permits acquisition. The independently installed Host QuiescenceGate composition refuses recovery before native retirement. These checks use synthetic provider transport and owned SQLite state; they do not qualify a live graph, account or device.
+
+## Bounded fallback successor
+
+Automatic startup now tries one different configured model after a conclusive
+model/access rejection before a call ID exists. Admission is rechecked between
+attempts. Explicit provider requests, empty/same fallback, authentication/limits,
+unknown failures and allocated calls do not switch. Offline actual transport
+fixtures verify selected voice and status without SDP; second failures never
+loop. Node lifetime tests retain unknown call markers and command receipts. Native
+optional-field revisions preserve old unknown preference receipts. These checks
+do not qualify real audio or account access.
