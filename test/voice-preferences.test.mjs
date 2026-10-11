@@ -25,7 +25,7 @@ test('optional preferences are host-scoped, lazy, bounded, and sanitized without
   assert.equal(f.counts.settings,0);assert.equal(f.provider.manifest.topics['voice-preferences'].scope,'host');
   assert.equal(f.provider.actionSchemas['voice.preferences.update'].schema.properties.patch.additionalProperties,false);
   const page=await f.provider.read({uri:'amplifier-media://voice-preferences?scope=host',scope:'host'});
-  assert.deepEqual(page.data.voicePreferences,base());assert(!JSON.stringify(page).includes('must-not-project'));
+  assert.deepEqual(page.data.voicePreferences,{...base(),fallbackBehavior:'on-model-unavailable'});assert(!JSON.stringify(page).includes('must-not-project'));
   const old=await f.provider.read({uri:'amplifier-media://configuration?scope='+encodeURIComponent(session)});
   assert.equal(old.data.voiceConfiguration.preferencesRevision,'a'.repeat(64));assert.equal(old.data.voiceConfiguration.configurable,false);
   await assert.rejects(f.provider.read({uri:'amplifier-media://voice-preferences',scope:session}),/host scope/);
@@ -98,7 +98,7 @@ test('installed native adapter and media preserve shared CAS, loss recovery and 
   await assert.rejects(f.provider.action(lostCommand,context),/unknown/);assert.equal(updates,3);
   const mediaLease=await f.provider.quiescenceParticipant('media').acquire(fence),nativeLease=await admin.quiescenceParticipant.acquire(fence);assert.ok(mediaLease);assert.ok(nativeLease);
   assert.equal((await f.provider.action(request('voice.preferences.receipt',{commandId:'lost'}),context)).result.status,'succeeded');
-  const metadata=(await f.provider.read({uri:'amplifier-media://configuration'})).data.voiceConfiguration;assert.equal(metadata.credentialAccess,'disabled');assert.equal(metadata.available,false);assert.equal(metadata.fallbackBehavior,'stored-only');
+  const metadata=(await f.provider.read({uri:'amplifier-media://configuration'})).data.voiceConfiguration;assert.equal(metadata.credentialAccess,'disabled');assert.equal(metadata.available,false);assert.equal(metadata.fallbackBehavior,'on-model-unavailable');
   await nativeLease.release('unchanged',{kind:'admission-refused'});await mediaLease.release('unchanged',{kind:'admission-refused'});
   assert.equal(f.counts.secrets,0);assert.equal(f.counts.workers,0);await assert.rejects(stat(join(home,'projects')));await assert.rejects(stat(join(home,'keys.env')));
   assert(!JSON.stringify(metadata).includes('apiKey'));assert.match(await readFile(join(home,'settings.yaml'),'utf8'),/interruptions: false/);

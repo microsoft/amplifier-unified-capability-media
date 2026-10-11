@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {chmodSync} from 'node:fs';
 import {join} from 'node:path';
 import {validateMediaStore} from './store-startup.js';
-const fields=['preferredModel','fallbackModel','voice','interruptions'];
+const fields=['preferredModel','fallbackModel','voice','interruptions','fallbackVoice'];
 const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
 const token=(value,name)=>{if(typeof value!=='string'||!value||value.length>200||/[\x00-\x1f]/.test(value))throw Error(`A bounded ${name} is required`);return value};
 const sha=value=>createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
@@ -12,8 +12,8 @@ const copy=value=>structuredClone(value);
 
 /** Only public non-secret metadata crosses into the capability projection. */
 export function projectPreferences(value={},writable=false){
- const result={fallbackBehavior:value.fallbackBehavior==='stored-only'?'stored-only':undefined,preferenceFields:[],models:[]};
- for(const key of ['preferredModel','fallbackModel','voice'])if(typeof value[key]==='string'&&value[key].length<=200)result[key]=value[key];
+ const result={fallbackBehavior:'on-model-unavailable',preferenceFields:[],models:[]};
+ for(const key of ['preferredModel','fallbackModel','voice','fallbackVoice'])if(typeof value[key]==='string'&&value[key].length<=200)result[key]=value[key];
  if(typeof value.interruptions==='boolean')result.interruptions=value.interruptions;
  if(typeof value.preferencesRevision==='string'&&/^[a-f0-9]{64}$/.test(value.preferencesRevision))result.preferencesRevision=value.preferencesRevision;
  if(writable&&result.preferencesRevision&&Array.isArray(value.preferenceFields))result.preferenceFields=fields.filter(field=>value.preferenceFields.includes(field));
@@ -91,6 +91,6 @@ export class VoicePreferences {
 
 const text={type:'string',minLength:1,maxLength:200};
 export const schemas={
- 'voice.preferences.update':{description:'Save reviewed shared voice defaults with revision checking. The fallback value is stored only; it does not enable automatic transport fallback.',schema:{type:'object',additionalProperties:false,required:['expectedRevision','patch'],properties:{expectedRevision:{type:'string',pattern:'^[a-f0-9]{64}$'},patch:{type:'object',additionalProperties:false,minProperties:1,properties:{preferredModel:text,fallbackModel:text,voice:text,interruptions:{type:'boolean'}}}}}},
+ 'voice.preferences.update':{description:'Save reviewed shared voice defaults with revision checking. Automatic calls can use the configured fallback after a model rejection before call creation. Empty fallbackModel disables fallback; empty fallbackVoice uses a compatible speaking voice.',schema:{type:'object',additionalProperties:false,required:['expectedRevision','patch'],properties:{expectedRevision:{type:'string',pattern:'^[a-f0-9]{64}$'},patch:{type:'object',additionalProperties:false,minProperties:1,properties:{preferredModel:text,fallbackModel:{...text,minLength:0},voice:text,fallbackVoice:{...text,minLength:0},interruptions:{type:'boolean'}}}}}},
  'voice.preferences.receipt':{description:'Inspect the exact original voice preference command without replaying it.',schema:{type:'object',additionalProperties:false,required:['commandId'],properties:{commandId:text}}},
 };

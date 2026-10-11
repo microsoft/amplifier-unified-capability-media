@@ -90,10 +90,10 @@ test('missing confirmed history rebuilds only projection and retains unknown int
   const path=join(directory,names.transcripts);let attempts=0;
   let queue=new TranscriptQueue(path,{record:async entry=>{attempts++;if(entry.callId==='unknown')throw Error('uncertain');return {recorded:true,nativeMessageId:'native-confirmed',text:entry.text};}});
   const entry={session:'fixture',callId:'confirmed',itemId:'item',role:'user',text:'confirmed',append:false,commandId:'confirmed'};
-  queue.enqueue(entry);await queue.flush('fixture');queue.enqueue({...entry,callId:'unknown',commandId:'unknown'});await queue.flush('fixture');assert.equal(queue.history('fixture').length,1);await queue.close();
+  queue.enqueue(entry);await queue.flush('fixture');queue.enqueue({...entry,callId:'unknown',commandId:'unknown'});await queue.flush('fixture');assert.deepEqual(queue.history('fixture').map(row=>row.durability),['native','unconfirmed']);await queue.close();
   const db=new DatabaseSync(path);db.exec('DROP TABLE history');db.close();
   queue=new TranscriptQueue(path,{record:async()=>{attempts++;throw Error('must not replay');}});
-  assert.deepEqual(queue.history('fixture'),[]);assert.equal(queue.unknownCount(),1);await queue.flush('fixture');assert.equal(attempts,2);await queue.close();
+  assert.equal(queue.history('fixture').length,1);assert.equal(queue.history('fixture')[0].durability,'unconfirmed');assert.equal(queue.history('fixture')[0].callId,'unknown');assert.equal(queue.unknownCount(),1);await queue.flush('fixture');assert.equal(attempts,2);await queue.close();
  }finally{await rm(directory,{recursive:true,force:true});}
 });
 test('configured stores validate before quiescence writes; disabled preferences remain optional',async()=>{

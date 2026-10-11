@@ -25,7 +25,10 @@ def call():
 @pytest.mark.parametrize('provider',['live','realtime'])
 async def test_preserved_provider_transport_and_only_delegation_tool(provider):
     c,o,s,m=call();result=await c.create('v=0',provider);assert result['model']==MODELS[provider];assert o.admit.await_count==1
-    if provider=='live':assert m.request.call_args.kwargs['json']['session']['delegation']=={'type':'client'}
+    if provider=='live':
+        config=m.request.call_args.kwargs['json']['session']
+        assert config['delegation']=={'type':'client'}
+        assert all(label in config['instructions'] for label in ('Backchannel policy:', 'Interruption policy:', 'Delegation policy:', 'Do not delegate to the backend when:', 'omit greetings already exchanged'))
     else:assert m.request.call_args.args==('POST','/realtime/calls')
     c.final.set();await c.close()
 async def test_transcript_dedupe_without_prompt_execution():
@@ -40,3 +43,127 @@ async def test_bounded_context_has_no_private_ui_or_estate():
     text=compact_context({'title':'Chosen','sessions':[{'title':'SECRET'}],'view':{'draft':'PRIVATE'},'messages':[{'text':'x'*10000,'role':'user'}]*100},'s');assert 'SECRET' not in text and 'PRIVATE' not in text;assert len(text)<6000
 async def test_completion_speech_cannot_execute_tools():
     c,o,s,m=call();c.id='rtc';c.provider='realtime';c.socket=s;c.realtime_pending_response=True;await c.flush_realtime_response();assert s.sent[0]['response']['tool_choice']=='none';c.closed=True
+async def test_live_seeds_roles_and_delegates_plain_user_text_with_identity():
+    c,o,s,m=call()
+    o.context['messages']=[{'role':'user','text':'Good morning','via':'call'},{'role':'assistant','text':'Hello!','via':'call'}]
+    await c.create('v=0','live')
+    config=m.request.call_args.kwargs['json']['session']
+    assert [row['role'] for row in config['input']]==['user','assistant']
+    await c.record('user','What can you help with?','spoken-one')
+    await c.delegate_live('delegation-one')
+    args=o.delegate.call_args
+    assert args.args==('What can you help with?',)
+    assert args.kwargs['delivery']['sourceItemIds']==['spoken-one']
+    assert args.kwargs['delivery']['context'][0]['text']=='Good morning'
+    c.final.set();await c.close()
+
+async def test_typed_result_retries_only_known_busy_and_speaks_once():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    o.record_delivery=AsyncMock(side_effect=[{'recorded':False,'reason':'busy','retryable':True,'executed':False},{'recorded':True}])
+    snapshot={'generations':[{'event':'generation.finished','generation_id':'typed-one','input_ids':['typed-one'],'response':'An answer'}]}
+    await c.announce_generations(snapshot);await c.announce_generations(snapshot)
+    assert o.record_delivery.await_count==2 and len(s.sent)==1
+    assert 'typed-one' in c.delivered_generations
+    c.closed=True
+
+async def test_delegation_offset_does_not_consume_a_later_question():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    await c.record('user','Check tools','u1',delta=True,start=10,at=100)
+    await c.record('user','Now file feedback','u2',delta=True,start=300,at=400)
+    await c.delegate_live('first',200)
+    assert o.delegate.call_args.args==('Check tools',)
+    assert o.delegate.call_args.kwargs['delivery']['sourceItemIds']==['u1']
+    await c.delegate_live('second',500)
+    assert o.delegate.call_args.args==('Now file feedback',)
+    assert o.delegate.await_count==2
+
+async def test_late_answer_requests_durable_fallback_without_speech():
+    c,o,s,m=call();c.id='live-one';c.socket=s;wait=asyncio.Event()
+    o.record_result_fallback=AsyncMock()
+    async def delegated(*args,**kwargs):
+        await wait.wait()
+        return {'text':'Saved answer','generation_id':'turn','completed':True,'status':'completed'}
+    o.delegate.side_effect=delegated
+    await c.record('user','Check tools','u')
+    task=asyncio.create_task(c.delegate_live('d'));await asyncio.sleep(0)
+    c.closed=True;wait.set();await task
+    o.record_result_fallback.assert_awaited_once_with('voice:live-one:d')
+    assert not s.sent
+
+def test_context_retains_facts_and_is_always_parseable():
+    import json
+    context={'title':'t'*10000,'activity':{'status':'working','activeTurnId':'turn','executionRevision':7,'private':'secret'},'selection':[{'id':'model','value':'Astra'}],
+             'capabilities':{'actions':['feedback.submit','feedback.receipt'],'secret':'private'},'messages':[{'role':'user','text':'x'*10000}]*40}
+    data=json.loads(compact_context(context,'session'))
+    assert data['activity']=={'status':'working','activeTurnId':'turn','executionRevision':7}
+    assert data['selection'][0]['value']=='Astra'
+    assert 'feedback.submit' in data['capabilities']['actions']
+    assert data['capabilities']['nativeTools']=='not-inspected'
+    assert 'private' not in json.dumps(data)
+
+def test_pending_outcome_never_reads_progress_as_success():
+    from amplifier_unified_media.voice import result_text
+    value=result_text({'completed':False,'status':'dispatching','workContinues':True,'text':'I filed it'})
+    assert 'still running' in value and 'I filed it' not in value
+
+async def test_answered_exchange_is_reference_not_repeated_request():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    await c.record('user','What tools do you have?',delta=True,start=0,at=100)
+    await c.record('assistant','I can check the current tools.',delta=True,start=150,at=200)
+    await c.record('user','Please check.',delta=True,start=250,at=350)
+    await c.delegate_live('d',400)
+    assert o.delegate.call_args.args==('Please check.',)
+    reference=o.delegate.call_args.kwargs['delivery']['context']
+    assert reference==[{'role':'user','text':'What tools do you have?'},{'role':'assistant','text':'I can check the current tools.'}]
+
+async def test_completed_result_survives_failed_voice_delivery_without_replay():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    o.record_result_fallback=AsyncMock()
+    o.delegate.return_value={'text':'Saved answer','generation_id':'turn','completed':True,'status':'completed'}
+    s.send_json=AsyncMock(side_effect=ConnectionError('closed'))
+    await c.record('user','Check tools','u')
+    await c.delegate_live('d')
+    assert o.delegate.await_count==1
+    o.record_result_fallback.assert_awaited_once_with('voice:live-one:d')
+
+def test_capability_catalog_does_not_evict_recent_conversation():
+    import json
+    context={'messages':[{'role':'user','text':'Already greeted'},{'role':'assistant','text':'Already answered'}],
+        'capabilities':{'nativeTools':'inspected','tools':[{'name':str(i),'description':'x'*120} for i in range(48)],'actions':['x'*100]*80}}
+    data=json.loads(compact_context(context,'session'))
+    assert data['recent_messages']==context['messages']
+    assert len(json.dumps(data,ensure_ascii=False))<=5900
+
+async def test_oversized_spoken_request_is_not_silently_submitted_in_part():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    for i in range(513):await c.record('user','word ','u',delta=True,start=i,at=i+1)
+    await c.delegate_live('d',600)
+    assert o.delegate.await_count==0
+    assert len(c.user_fragments)==512
+    assert 'No new work was submitted' in ''.join(e['content'] for e in s.sent)
+
+async def test_delegation_uses_selected_context_without_a_fallible_history_refresh():
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    o.inspect=AsyncMock(side_effect=RuntimeError('unindexed ordering boundary'))
+    o.context['messages']=[{'role':'assistant','text':'Previous result','via':'call','voiceItemId':'prior'}]
+    await c.record('user','Make a 3D demo','u')
+    await c.delegate_live('d')
+    o.inspect.assert_not_awaited()
+    o.delegate.assert_awaited_once()
+    assert o.delegate.call_args.args==('Make a 3D demo',)
+    assert o.delegate.call_args.kwargs['delivery']['context']==[{'role':'assistant','text':'Previous result'}]
+
+async def test_delegation_failure_records_identity_without_private_error_text(tmp_path):
+    import json
+    c,o,s,m=call();c.id='live-one';c.socket=s
+    m.protocol_diagnostics=VoiceDiagnostics(tmp_path)
+    o.delegate.side_effect=ConnectionError('PRIVATE transcript fixture-secret')
+    await c.record('user','Make a demo','u')
+    await c.delegate_live('d')
+    records=[json.loads(line) for line in (tmp_path/'voice-diagnostics/events.jsonl').read_text().splitlines()]
+    failed=next(row for row in records if row['type']=='local.request_failed')
+    assert failed['delegation_id']=='d' and failed['status']=='unknown'
+    assert failed['error']['type']=='ConnectionError'
+    assert 'PRIVATE' not in json.dumps(records)+json.dumps(s.sent)
+    assert o.delegate.await_count==1
+    assert 'Do not claim work is running' in s.sent[-1]['content']

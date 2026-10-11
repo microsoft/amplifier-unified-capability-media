@@ -19,7 +19,7 @@ async function delegate(f,lease,id='delegate'){return f.callbacks.delegate({leas
 
 test('future connections read confirmed defaults while established calls exclude writes',async()=>{
  const f=await fixture();try{const lease=await f.attach();await f.post(lease,'voice/connect',{commandId:'first',sdp:'v=0'});const update=id=>({version:1,topic:'voice-preferences',channel:'ahp-root://',operation:'voice.preferences.update',commandId:id,args:{expectedRevision:'a'.repeat(64),patch:{preferredModel:'gpt-realtime-2.1',voice:'cedar'}}});
- assert.equal((await f.owner.action(update('active'),context)).accepted,false);assert.equal(f.connections[0].preferredModel,'gpt-live-1');await f.post(lease,'voice/end',{id:'call-1'});assert.equal((await f.owner.action(update('future'),context)).accepted,true);await f.post(lease,'voice/connect',{commandId:'second',sdp:'v=0'});assert.equal(f.connections[1].preferredModel,'gpt-realtime-2.1');assert.equal(f.connections[1].voice,'cedar');assert.equal(f.connections[1].fallbackBehavior,'stored-only');assert.equal(f.connections.length,2);
+ assert.equal((await f.owner.action(update('active'),context)).accepted,false);assert.equal(f.connections[0].preferredModel,'gpt-live-1');await f.post(lease,'voice/end',{id:'call-1'});assert.equal((await f.owner.action(update('future'),context)).accepted,true);await f.post(lease,'voice/connect',{commandId:'second',sdp:'v=0'});assert.equal(f.connections[1].preferredModel,'gpt-realtime-2.1');assert.equal(f.connections[1].voice,'cedar');assert.equal(f.connections[1].fallbackBehavior,'on-model-unavailable');assert.equal(f.connections.length,2);
  }finally{await f.close()}
 });
 

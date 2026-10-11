@@ -24,7 +24,7 @@ export function voiceErrorResponse(error,path){
  let failure=error;
  if(!failure.voicePublic&&!failure.mediaPublic&&sensitive){
   const status=error.data?.source==='voice-provider'?error.data.status:undefined;
-  const code=status===401?'voice_credentials_invalid':[403,404].includes(status)?'voice_model_unavailable':status===429?'voice_rate_limited':path.endsWith('/configure')?'voice_configuration_unknown':path.endsWith('/config')?'voice_settings_unavailable':path.endsWith('/preview')?'voice_preview_unknown':'voice_connection_unknown';
+  const code=status===401?'voice_credentials_invalid':[400,403,404].includes(status)?'voice_model_unavailable':status===429?'voice_rate_limited':path.endsWith('/configure')?'voice_configuration_unknown':path.endsWith('/config')?'voice_settings_unavailable':path.endsWith('/preview')?'voice_preview_unknown':'voice_connection_unknown';
   failure=voiceFailure(code,error.data?.executed===false?false:undefined);
  }
  return Response.json({error:failure.message,code:failure.voicePublic?failure.code:'media_error',...(failure.voicePublic?{outcome:failure.executed===false?'rejected':'unknown',retryable:false,...(failure.executed===false?{executed:false}:{})}:{})},{status:failure.status||502,headers:{'Cache-Control':'no-store'}});

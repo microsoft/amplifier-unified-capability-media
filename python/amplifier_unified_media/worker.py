@@ -2,7 +2,7 @@
 import asyncio, json, sys, uuid, hashlib
 from pathlib import Path
 import aiohttp
-from .voice import VoiceCall, VoiceError, ProviderError, API, MODELS
+from .voice import VoiceCall, VoiceError, ProviderError, API, MODELS, should_fallback
 from .voice_diagnostics import VoiceDiagnostics
 from .voice_options import selected_voice, voices_for
 from .sample import render_sample
@@ -34,7 +34,7 @@ class Rpc:
         except Exception as error:
             # Provider errors are already sanitized. Never return arbitrary HTTP payloads.
             text=str(error) if isinstance(error,(VoiceError,ValueError)) else 'Media transport failed; the outcome may be unknown.'
-            details={'source':'voice-provider','status':error.status,**({'executed':False} if getattr(error,'media_not_executed',False) else {})} if isinstance(error,ProviderError) and error.status in (401,403,404,429) else None
+            details={'source':'voice-provider','status':error.status,**({'executed':False} if getattr(error,'media_not_executed',False) else {})} if isinstance(error,ProviderError) and (error.status in (401,403,404,429) or should_fallback(error)) else None
             self.send({'jsonrpc':'2.0','id':identity,'error':{'code':-32000,'message':text[:500],**({'data':details} if details else {})}})
     def work(self):
         self.calls={call for call in self.calls if not call.closed or any(not task.done() for task in call.tasks) or any(task and not task.done() for task in (call.pump,call.observer))}
@@ -141,16 +141,27 @@ class Rpc:
                 sdp=args.get('sdp','')
                 if not isinstance(sdp,str) or not sdp.startswith('v=0') or len(sdp)>100000: raise VoiceError('A valid bounded SDP offer is required.')
                 if not owner.api_key: raise VoiceError('Configure voice credentials before calling.')
-                provider=args.get('provider','auto'); settings=args.get('settings',{})
+                requested_provider=provider=args.get('provider','auto'); settings=args.get('settings',{})
                 if provider=='auto': provider=next((key for key,model in MODELS.items() if model==settings.get('preferredModel',MODELS['live'])),None)
                 if provider not in MODELS: raise VoiceError('The configured voice model is unsupported.')
                 call=owner.call=VoiceCall(owner,owner.session);self.calls.add(call)
                 call.voice_name=selected_voice(MODELS[provider],settings.get('voice','marin')); call.interruptions=settings.get('interruptions',True)
-                result=await call.create(sdp,provider)
+                try:
+                    result=await call.create(sdp,provider)
+                except ProviderError as primary:
+                    fallback=next((key for key,model in MODELS.items() if model==settings.get('fallbackModel')),None)
+                    if requested_provider!='auto' or getattr(call,'id','') or not should_fallback(primary) or not fallback or fallback==provider:raise
+                    # The first request was conclusively rejected before a call
+                    # existed. Recheck admission before the one configured fallback.
+                    try:await call.require_admission()
+                    except Exception:raise primary
+                    call.voice_name=selected_voice(MODELS[fallback],settings.get('fallbackVoice') or settings.get('voice') or 'marin')
+                    result=await call.create(sdp,fallback)
+                    result={**result,'preferredModel':MODELS[provider],'fallbackReason':'The preferred voice model was unavailable. Connected using your fallback model.'}
                 await owner.set_voice_status({'status':'connecting',**{k:v for k,v in result.items() if k!='sdp'}})
                 return result
             except Exception as error:
-                if isinstance(error,ProviderError) and not getattr(owner.call,'id','') and error.status in (401,403,404,429):error.media_not_executed=True
+                if isinstance(error,ProviderError) and not getattr(owner.call,'id','') and (error.status in (401,403,404,429) or should_fallback(error)):error.media_not_executed=True
                 if owner.call: await owner.call.close()
                 self.owners.pop(lease,None); await owner.http.close(); raise
             finally:
@@ -186,7 +197,9 @@ class Owner:
     async def callback(self,name,**args): return await self.rpc.callback(name,{'lease':self.lease,'session':self.session,'clientId':self.client_id,**args})
     async def admit(self): return await self.callback('admit')
     async def inspect(self): self.context=await self.callback('inspect'); return self.context
-    async def delegate(self,text,command_id): return await self.callback('delegate',text=text,commandId=command_id)
+    async def delegate(self,text,command_id,delivery=None): return await self.callback('delegate',text=text,commandId=command_id,delivery=delivery)
+    async def record_result_fallback(self,command_id): return await self.callback('fallback',commandId=command_id)
+    async def record_delivery(self,input_id): return await self.callback('delivery',inputId=input_id)
     async def record_voice_transcript(self,role,text,**args): return await self.callback('transcript',role=role,text=text,callId=args['voice_id'],itemId=args['item_id'],append=args.get('append',False))
     async def record_voice_usage(self,session_id,call_id,response_id,model,usage,phase='completed',**_): return await self.callback('usage',callId=call_id,responseId=response_id,model=model,usage=usage,phase=phase)
     async def set_voice_status(self,status): return await self.callback('status',status=status)

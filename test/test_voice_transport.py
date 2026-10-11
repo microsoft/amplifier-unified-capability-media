@@ -31,7 +31,8 @@ class Transport:
         else:
             config=json.loads(next(value for headers,_,value in kwargs['data']._fields if headers['name']=='session')); provider='realtime'
         self.attempts.append({'provider':provider,'config':config})
-        if self.refusal: return Response(self.refusal,json.dumps({'error':{'code':'model_not_available'}}))
+        refusal=self.refusal.pop(0) if isinstance(self.refusal,list) else self.refusal
+        if refusal: return Response(refusal,json.dumps({'error':{'code':'model_not_available'}}))
         if provider=='live': return Response(text=json.dumps({'session':{'id':'offline-live'},'transport':{'sdp':'offline-answer'}}))
         return Response(text='offline-answer',headers={'Location':'/v1/realtime/calls/offline-realtime'})
     async def ws_connect(self,*_,**__): return self.socket
@@ -73,13 +74,30 @@ async def test_saved_defaults_reach_actual_transport_and_next_call(monkeypatch,m
             owner.call.final.set(); await rpc.dispatch('end',{'lease':owner.lease})
 
 
-async def test_provider_refusal_uses_one_actual_transport_attempt_without_fallback(monkeypatch):
+async def test_provider_refusal_stops_after_the_one_configured_fallback(monkeypatch):
     rpc,attempts,_=fixture(monkeypatch,404)
     with pytest.raises(worker.ProviderError) as error:
         await rpc.dispatch('connect',offer('gpt-realtime-2.1'))
     assert error.value.media_not_executed is True
-    assert [row['provider'] for row in attempts]==['realtime']
+    assert [row['provider'] for row in attempts]==['realtime','live']
     assert not rpc.owners
+
+
+async def test_actual_fallback_transport_reports_selected_model_voice_and_no_sdp_in_status(monkeypatch):
+    rpc,attempts,callbacks=fixture(monkeypatch,[404,None])
+    args=offer('gpt-live-1','quartz')
+    args['settings'].update(fallbackModel='gpt-realtime-2.1',fallbackVoice='cedar')
+    try:
+        result=await rpc.dispatch('connect',args)
+        assert [row['provider'] for row in attempts]==['live','realtime']
+        assert result['provider']=='realtime' and result['model']=='gpt-realtime-2.1' and result['voice']=='cedar'
+        assert result['preferredModel']=='gpt-live-1' and result['fallbackReason']
+        assert attempts[1]['config']['audio']['output']['voice']=='cedar'
+        statuses=[args['status'] for name,args in callbacks if name=='status']
+        assert statuses and statuses[-1]['voice']=='cedar'
+        assert 'sdp' not in statuses[-1]
+    finally:
+        for owner in list(rpc.owners.values()):await rpc.dispatch('end',{'lease':owner.lease})
 
 
 async def test_interruption_and_hangup_preserve_accepted_delegation_and_final_text(monkeypatch):
