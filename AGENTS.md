@@ -1,5 +1,7 @@
 # Media repository entry point
 
+This codebase is yours: what it's for and how it's built are your call, and you'll keep building on it.
+
 Read [VISION.md](VISION.md), [media contract v1](contracts/media.v1.md), and
 [README.md](README.md) before changing this owner's public behavior. The contract
 links the approved shared family direction and upstream authorities; its local
