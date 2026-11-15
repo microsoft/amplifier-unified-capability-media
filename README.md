@@ -1,415 +1,83 @@
-# Amplifier Unified media capability
+# Unified media capability
 
-Start with the [local vision](VISION.md), [versioned media contract](contracts/media.v1.md)
-and [agent entry point](AGENTS.md). The [acceptance note](docs/media-owner-acceptance.md)
-keeps exact implementation evidence separate from desired behavior and remaining gaps.
+Add voice conversations, transcript delivery and explicitly authorized visual
+capture to an Amplifier Unified host. The package connects browser media and an
+optional Python voice worker to the host's existing sessions and provider setup.
+It is an integration library, not a standalone voice app.
 
-Independent media owner for the Unified host. It does not import the host, Core,
-Foundation, AppService, or client source. Browser audio goes directly over WebRTC;
-only scoped signalling crosses the authenticated HTTP media plane. The optional
-Python worker preserves the existing GPT-Live and GPT-Realtime sideband protocol,
-transcript deduplication, generation correlation and hangup-with-work-continuing
-semantics. It has no global app-state subscription.
+## Get started
 
-Passive configuration reads use sanitized `settings()` metadata:
-`available`, `reason`, `configurable`, and optional
-`credentialAccess: "enabled" | "disabled"`. Missing availability is reported
-as unavailable. These reads never call `resolveCredential` or start a worker;
-credential resolution belongs only to an explicit voice connection or preview.
-The settings owner must not include secrets in this public projection.
-The additive `availability` field distinguishes `disabled`, `missing-credentials`,
-`configured`, and `unavailable`. `credentialValidation: "not-checked"` means
-configured key presence does not prove account access. Voice access is independent
-of `enableNative` (foreground capture). Connect and preview preflight metadata and
-credentials before starting a worker or durable provider-call lifetime marker.
+Use Node.js 22+ and a configured host. Voice transport also needs Python 3.11+,
+uv and an appropriate provider account. From a checkout:
 
-`environmentAvailable` and `privateKeyAvailable` retain only the credential owner's
-boolean presence metadata, or `null` when unknown or credential access is disabled.
-Clients can offer the existing host OpenAI key and identify a saved private voice
-key without obtaining either value. Saving a connection returns a fresh effective
-configuration; only an explicit call or preview resolves its selected credential.
+```sh
+npm ci
+uv sync --extra openai
+```
 
-Voice HTTP failures return fixed actionable `error` copy, a stable `voice_*`
-`code`, `outcome: "rejected" | "unknown"`, and `retryable: false`. Only a proved
-preflight or provider refusal includes `executed: false`. Private provider status
-401 maps to rejected credentials, 403/404 to unavailable model access, and 429 to
-usage limits. Provider bodies and arbitrary callback exceptions are never public
-copy. A conclusive refusal before provider call identity leaves no call lifetime
-marker; its command receipt remains inert. Transport loss or any failure after
-call identity remains uncertain and is never automatically replayed. Credential
-configuration accepts only `source` (`environment` or `private`) and an optional
-bounded single-line `apiKey`; its response is a fresh sanitized projection. A
-failed projection read after saving leaves the save outcome unknown. Retained
-command identity, fingerprint and outcome are checked before fresh credential
-preflight; changed settings never reclassify an earlier effect or permit replay.
-One client lease admits only one call or preview startup at a time. An unconfirmed
-call lifetime remains retained after sideband failure or response loss; a fresh
-command cannot replace it. Only a confirmed provider end releases that lifetime.
-Proved provider refusal before identity still permits a later fresh command.
-
-`createMediaCapability` takes durable private `directory`, `inspectSession`,
-`delegate`, `recordTranscript`, and optional `recordUsage`, `subscribeSession`,
-`resolveCredential`, `settings`, `configure`, `recordCapture`, `clientPresent`,
-`nativeStatus`, `nativeCapture`, `enableNative`, `onChanged`, `python` callbacks,
-and `pythonMode`.
-
-- `inspectSession(sessionURI)` returns bounded title/activity/messages/workers.
-- `subscribeSession(sessionURI, onBoundedContext)` returns an unsubscribe or promise.
-- `delegate({session,clientId,commandId,text,attachments?})` admits ordinary host
-  input and waits for its identified completion. It must return busy/unknown
-  honestly and must not replay a prior command. Attachments use standard AHP
-  embeddedResource typed image data from one fresh explicitly captured frame.
-- `recordTranscript({session,callId,itemId,role,text,append,commandId})` invokes the
-  negotiated native writer. Only `recorded:true` is native durability. The exact
-  native `busy/retryable/executed:false` result stays pending; transport uncertainty
-  stays unknown and is never automatically retried. `flushTranscripts(session)`
-  retries only that exact known-busy outcome on a selected session update, including after restart. Unattempted adjacent deltas coalesce for 100 ms in a durable SQLite intent spool; content freezes before the first native attempt. Indexed queries drain at most 64 entries for one session and never scan historical files. This spool is not native transcript authority.
-- `recordCapture(metadata)` optionally records a passive historical image reference
-  using native capability; media owns immutable validated PNG bytes and metadata.
-- Credentials are supplied through `resolveCredential(session)` only when needed;
-  no credential, SDP or audio payload is retained in capability state or receipts.
-
-Compose `manifest`, `read`, `action`, `resourceProvider` into the host registry.
-Call actions with trusted `{account,clientId}`. `media.attach` allocates a
-memory-only token bound to that identity and session; it does not acquire devices.
-Mount `handleMedia(req,res,{account,origin})` before gateway static routing at
-`/media/*`. A Fetch adapter `handleFetch(request,{account})` supports other servers.
-The provider validates the `X-Amplifier-Media-Lease` header; query-string credentials
-and arbitrary client-id headers are not used. Account comes only from the gateway.
-The gateway must enforce same-origin requests and request limits. Provider body
-limit is 750 KB, and image validation requires complete PNG <=500 KB/1280 pixels.
-
-AHP voice resources contain settings and at most 50 native-durable transcript
-rows for one selected conversation. There are no client drafts, device settings,
-media streams or full history snapshots. Shared updates do not seize client UI.
-Resource watches invalidate only this selected topic. Immutable frame URIs carry
-session and content hash; the host authenticates access before routing resourceRead.
-
-Client mute, playback, wake locks and selected device tracks stay client-owned.
-Screen permission is explicit, memory-only, client/session-bound and lasts at most
-15 minutes; detach/revoke invalidates pending requests. There is no background
-capture, replay after restart or implicit permission prompt. Native foreground
-observation is opt-in with `enableNative:true`; it uses the existing bounded fixed
-helper and optional computer-use library. It grants no desktop control. There is
-no new camera feature.
-
-Install the Python transport separately: `uv sync --extra openai` (optional native
-library must be installed in that same interpreter). Pass the resulting Python
-path to the factory. Deployment bindings must explicitly select
-`pythonMode: "installed"`: the owner launches exactly `-I -B -m
-amplifier_unified_media.worker`, removes inherited `PYTHONPATH`/`PYTHONHOME`, and
-uses the interpreter's installed wheel without bundled-source overlays or
-bytecode writes. The default `pythonMode: "package-source"` explicitly preserves
-local development compatibility through the packaged Python source directory.
-No automatic fallback changes runtime modes. Private worker `runtime.inspect`
-reports isolated/bytecode flags and package/loaded-module hashes for deployment
-qualification; it reads no credential or provider state and has no public HTTP
-route. Node-only fixture peers need no Python dependencies.
-
-Verification: `npm test`; `uv run --extra test python -m pytest -q`. All tests use
-fixtures. Source/fixture checks do not establish real-account audio, physical
-microphone/screen permission, latency or OS-native observation acceptance.
-
-Sources: extracted Unified voice.py, voice_settings.py sample rendering,
-voice_diagnostics.py, voice_options.*, voice_visual_image.py and native_foreground*
-from the approved integration worktree on 2026-10-02. The affected catalog also
-lists microsoft/amplifier-voice and robotdad/amplifier-app-voice / provider-openai-
-realtime; these separate products are not configured runtime dependencies here.
-OpenAI protocol checked against the official server-side-controls documentation:
-https://developers.openai.com/api/docs/guides/voice-server-controls
-
-## Held quiescence participant
-
-`createMediaCapability` returns `quiescenceParticipant(ownerId = 'media')` and
-`inspectQuiescence()`. Register the actual participant with the host for the voice
-capability, media HTTP ingress, and capture/transcript callbacks. The returned
-`quiescenceAccess` declares only `voice.configuration` as read-only. The optional
-`onMayBeIdle()` callback is a coalesced advisory completion signal; it is never
-idle proof and notification failures cannot change an effect result.
-
-`acquire({fenceId, commandId, purpose, instanceId, dataScope})` returns a held lease
-or `null` for known busy/uncovered work. Purpose is `recovery` or
-`distribution-update`. The owner atomically closes intake in a private durable
-SQLite fence, then acquires the existing Python worker's private gate. It never
-starts a worker to demonstrate idleness. A separate SQLite lifetime lease excludes
-another owner before the journals are opened; the operating system releases that
-lease after process death. The durable fence becomes `unknown` on restart.
-
-The gate accounts for complete HTTP/device/configuration effects, delegated host
-callbacks, pending transcript deliveries and drains, pending capture requests,
-live provider calls, and Python tasks/transport callbacks that continue after
-hangup. Attached viewers and idle screen grants are not work. Immutable saved
-frames, configuration, receipts, and selected status remain readable. The private
-worker's recent release cache is bounded to 256; the Node owner retains the durable
-canonical receipt, and evicted worker receipts are never authority to replay work.
-
-The held lease's `release(outcome, proof)` and the participant's
-`reconcileRelease({...context, outcome, proof})` require exact host fence identity.
-`unknown` retains closed intake. A conclusively refused aggregate admission may
-release a still-held lease using `{kind:'admission-refused'}` and `unchanged`.
-Otherwise proof must be `{verified:true, fenceId, commandId, outcome,
-instanceId, dataScope, receiptId}`, with the unchanged prior instance or a verified
-replacement instance for `ready`. These are trusted supervisor callbacks, not
-browser-supplied assertions. Private RPC fence operations are not public media
-HTTP routes. No uncertain call or transcript is replayed.
-
-### Pre-retirement admission abort
-
-The participant's optional `abortAdmission({...context, proof})` follows the Host
-admission-abort contract. It accepts only an authenticated supervisor proof with
-exactly `{kind: "distribution-admission-abort", verified: true,
-purpose: "distribution-update", receiptId, commandId, fenceId, instanceId,
-dataScope}`. This distinct proof cannot be replaced by a generic release or an
-admission-refused assertion. It grants no stop, retirement, replay or disposal.
-
-New distribution acquisitions durably retain their exact attempt before worker
-dispatch, including a known busy refusal before returning `null`. An abort needs
-that retained attempt and complete idle work accounting. The durable owner receipt
-contains exactly `{ownerId, status: "released" | "not-acquired", receiptId,
-commandId, fenceId, instanceId, dataScope}`. Receipt persistence and held-row
-removal share one transaction; an identical proof retry returns the original
-receipt without repeating worker settlement or clearing a newer fence. Changed
-proofs, identities, pending work and unknown provider lifetimes refuse.
-
-During a partial supervisor unwind, the original live lease may already have
-completed an exact `unchanged` release before another owner fails. That durable
-completed release, together with the original attempted acquisition, allows a
-later distinct authenticated abort to return `released` after Node restart. The
-Node completed-release journal already includes acknowledgement of the original
-worker release when a worker participated. It does not repeat worker settlement
-or remove a newer Node or worker hold. The worker RPC likewise recognizes its
-exact original held attempt plus retained conclusive unchanged-release receipt.
-The old generic release proof alone cannot authorize the new abort; `ready`,
-unknown or incomplete release evidence cannot substitute for an unchanged unwind.
-
-If acquisition reached an existing worker without a completed unchanged release, private
-`quiescence.abortAdmission` must return the exact original worker receipt before
-the Node authority clears. The worker's bounded attempt/receipt cache is
-process-local; the Node journal owns durability. Lost replies can be reconciled
-while that original worker retains its evidence. If it disappears after restart,
-or its evidence is evicted, abort remains unconfirmed; any existing outer hold
-stays closed. A worker is never started to manufacture non-acquisition proof. Legacy
-unknown fences without the new attempted-acquisition record stay unknown.
-Missing held rows and empty replacement-worker state are never proof.
-
-A lost provider-call acknowledgement or unconfirmed provider shutdown preserves an
-opaque call-lifetime marker across restart. Such a marker reports the explicit
-coverage gap `prior-provider-call-lifetime-unverified`, distinct from a historical
-unknown command receipt. The owner cannot prove an independent browser/provider
-call ended after losing its signalling process, so it refuses automatic quiescence
-until an external authoritative provider/client reconciliation is implemented.
-This release does not claim generic automatic updates across that unresolved case.
-
-Qualification uses the actual private Python worker and synthetic immutable PNG
-validation, plus provider fixtures and a SIGKILL/restart owner test. It does not
-establish physical microphone/screen or authenticated provider acceptance.
-
-Release retry proof is immutable: the owner atomically retains the canonical
-outcome and entire proof with its released receipt. After acknowledgement loss
-or restart, only the identical context, outcome and proof are accepted; changing
-the receipt identity, authority scope or outcome is rejected. JSON object key
-order is irrelevant. Older released receipts without exact proof evidence are
-not inferred or rewritten into verified release evidence.
-
-## Shared voice defaults
-
-The optional `voicePreferences(operation, args, context)` callback enables one
-host-scoped `voice-preferences` topic (`amplifier-media://voice-preferences`) and
-two ordinary capability actions. The topic's data is
-`{voicePreferences: {preferredModel, fallbackModel, voice, interruptions,
-preferencesRevision, preferenceFields, models, fallbackBehavior}}`. Model metadata
-and voice choices are explicitly bounded and sanitized. Existing `voiceConfiguration`
-reads also retain these fields; the host topic is the live shared-defaults watch
-so a change does not require enumerating or hydrating session state.
+Install the checkout into your host project with
+`npm install /absolute/path/to/amplifier-unified-capability-media`.
+Then compose the provider with your own authenticated host callbacks:
 
 ```js
-voicePreferences: (operation, args) => nativeAdmin.perform(
-  operation, args, {clientId: ''} // trusted host/default workspace resolver
-)
+import {createMediaCapability} from '@amplifier/unified-media-capability';
+
+const media = await createMediaCapability({
+  directory: '/absolute/private/media',
+  inspectSession,
+  delegate,
+  recordTranscript,
+  settings,
+  resolveCredential,
+  python: '/absolute/venv/bin/python',
+  pythonMode: 'installed',
+});
 ```
 
-The configured native launcher must independently enable `adminVoicePreferences`.
-Without a callback, this owner advertises no preference action and exposes no
-writable fields. Disabled credential access is compatible with non-secret shared
-defaults. The credential-only `configure` callback and `/media/voice/configure`
-route are unchanged; credential values never enter this topic or command journal.
+Use the Python executable from the prepared environment (`Scripts/python.exe` on
+Windows). The named functions above are integration callbacks, not globals
+provided by this package. `inspectSession` supplies bounded session context,
+`delegate` submits through normal host admission, and `recordTranscript` uses the
+native transcript writer. `settings` returns sanitized availability; only
+`resolveCredential` supplies the private credential for an explicit call or preview.
 
-`voice.preferences.update` uses channel `ahp-root://`, topic `voice-preferences`,
-args `{expectedRevision, patch}`, and the ordinary outer `commandId`. It forwards
-that exact command ID to native. Draft typing is entirely client-local. The result
-contains the exact native-style receipt. Known native `executed:false` refusals,
-including stale revisions, return `accepted:false`; unknown outcomes remain
-unknown and are never repeated. A complete callback lifetime is counted by media
-quiescence. Updates use the existing atomic exclusion of active calls, previews,
-concurrent startup and credential changes, and apply only to later calls.
+Register `manifest`, `read`, `action` and `resourceProvider` with the host.
+Mount `handleMedia` at `/media/*` before static routing, with authenticated account
+and origin context, and call `await media.close()` at shutdown. A Fetch adapter
+is also available. See [integration requirements](docs/integration.md) and the
+[factory implementation](src/index.js) for the callback and HTTP boundaries.
 
-`voice.preferences.receipt {commandId}` is an explicitly declared passive read
-usable under a held fence. The durable local intent index binds the original
-command to its authenticated account, allowing recovery from another client or
-owner restart without exposing other accounts' native receipts. An uncertain
-command is inspected through the native owner's exact receipt only; an inspection
-never replays it or rewrites product data during quiescence. A repeated update ID
-cannot perform a second write. Authenticated agent calls retain their own origin
-and need not borrow a browser client identity.
+## Permissions and privacy
 
-Only confirmed saves invalidate `voice-preferences` at `host` scope. The compositor
-must forward that callback to the generic host and register this media participant
-plus the independently held native-admin participant. Neither participant replaces
-the other's complete lifetime proof. Local receipts live in
-`voice-preferences.sqlite`, an independent product store; current selected-native
-archives do not include it implicitly.
+Browser audio uses WebRTC. Device selection, mute and playback stay client-owned.
+Screen capture requires an explicit, temporary client/session permission; there
+is no background capture or automatic replay after restart. Native foreground
+observation is opt-in and does not grant desktop control.
 
-`fallbackBehavior: "stored-only"` is intentional: the retained transport does not
-perform automatic fallback. Saving that legacy field does not claim it does.
-Offline fixture and installed ACP qualification establish settings behavior, not
-real voice-account, microphone, speaker, or browser acceptance.
+Configured credentials do not prove provider-account access. A lost call response
+remains uncertain; the integration must not automatically start another call.
+Keep private media records separate from native session history.
 
-## Persistent service stop and resume
+For development, see the [media contract](contracts/media.v1.md) and [AGENTS.md](AGENTS.md).
 
-The trusted `quiescenceParticipant()` advertises `serviceStop: {version: 1}`.
-For `purpose: 'service-stop'`, the host supplies the normal fence context plus
-`serviceIdentity: {installationId, dataScope, ownerId, instanceId, releaseDigest}`.
-The owner copies and retains the complete identity with its durable intake fence;
-restarting a process does not open intake or replay work. The host authenticates
-platform evidence. This participant validates its exact binding, not a PID,
-caller-provided claim of idleness, or socket presence.
+## Contributing
 
-A conclusive release needs `kind: 'service-lifecycle'`, the retained `expected`
-identity, the exact `observed` identity, and the ordinary verified fence receipt.
-`outcome: 'ready'` requires a distinct instance, `serviceOutcome: 'resumed'`,
-`resumeCommandId`, `exitReceiptId`, and `readyReceiptId`. `outcome: 'unchanged'`
-requires the same instance, `serviceOutcome: 'stop-refused'`, and
-`refusalReceiptId`. The two receipt sets cannot be mixed. A changed release
-identity, proof, or outcome refuses; exact completed retries are passive.
-Generic update/recovery evidence cannot release a service fence.
+Most contributions require you to agree to a
+Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
+the rights to use your contribution. For details, visit [Contributor License Agreements](https://cla.opensource.microsoft.com).
 
-`{kind: 'admission-refused'}` is restricted to the original live lease's partial
-acquisition rollback. It is not a restart reconciliation mechanism. An unknown
-outcome keeps intake closed, and passive inspection/receipt routes stay usable.
-No service stop, platform process signaling, authenticated supervisor, or remote
-provider safety is implemented by this participant itself.
+When you submit a pull request, a CLA bot will automatically determine whether you need to provide
+a CLA and decorate the PR appropriately (e.g., status check, comment). Simply follow the instructions
+provided by the bot. You will only need to do this once across all repos using our CLA.
 
-The Node owner is the durable authority. An already-started private Python worker must explicitly negotiate service-stop support before its gate is acquired. No worker is started just to prove idle. Release evidence is persisted before the worker call, including when its acknowledgement is lost. Active calls, detached delegation, transcript delivery, and uncertain provider lifetimes retain their existing busy/refusal behavior.
+This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
+For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
+contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
+## Trademarks
 
-## Held retention inspection
-
-The actual quiescence participant advertises `retentionHide: {version: 1}`.
-Acquire it with purpose `retention-hide` and the exact coordinator fence context.
-The returned live lease exposes
-`inspectRetentionReferences({sessions: ["ahp-session:/..."], limit: 101})`.
-The family must contain 1–101 distinct explicit session URIs. The result is
-`{coverage: "complete" | "partial", protected: [{session, reasons}], omissions}`.
-Only the original held lease can inspect; release, uncertainty or replacement
-invalidates that authority. Release reconciliation requires the same authenticated
-coordinator proof and never retries effects. A pre-effect admission rollback is
-allowed only on the original live lease. The purpose grants no mutation rights.
-
-Inspection reads bounded indexed owner metadata while intake remains closed.
-It never starts a native worker, scans canonical histories, deletes product records,
-or interprets absence of a runtime as absence of deferred work. `complete` describes
-this owner's reference coverage, not permission to hide or delete a conversation.
-The coordinator must hold every configured owner, check all results, and use the
-native history owner's separate preservation-first hide boundary.
-
-Active work blocks acquisition. Retained uncertain owner commands protect their explicitly associated conversations; unscoped uncertainty cannot produce a false absence proof.
-
-## Managed-file disposal protection
-
-`quiescenceParticipant.managedFiles = {version: 1, preservesCanonical: true}` is a separate contract from `retentionHide`. It holds the real owner intake with purpose `managed-files-disposal`, preserving every owner record. The acquired lease exposes:
-
-```ts
-inspectManagedFilesReferences({
-  sessions: [rootSession, ...descendants], // explicit AHP URIs, at most 101
-  limit: 101,
-  allocation: {allocationId, executionDirectory, allocationHash, treeHash, entryCount, bytes}
-}) // {coverage: 'complete' | 'partial', protected: [{session, reasons}], omissions: [...] }
-```
-
-The allocation comes from the trusted host's native-reviewed managed allocation, never a browser path. It is bound with the exact selected family on the first inspection of the live lease; a different review is refused. This read does not grant file deletion. The coordinator must bind release to its exact durable managed-files effect receipt, keep unknown fences held, and refuse partial/protected coverage. Lease inspectors expire before release begins, including unknown release; admission-refused rollback is available only on the original live lease. Restart reconciliation requires the existing exact verified release proof.
-
-Live calls, transports, callbacks and retained pending or unknown transcript intents prevent acquisition. The passive census reports pending and unknown delivery separately; confirmed native history alone does not block maintenance. Pending/unknown transcript intents protect selected conversations; completed frames and transcripts are owned copies outside the execution allocation. A resident media worker must negotiate the distinct managed-files gate before acquisition.
-
-Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
-
-## Shutdown and client-source acceptance
-
-`disconnect(clientId)` revokes that client's grants and stops its media transport.
-Provider-final transcript, usage and status callbacks for its already admitted
-lease remain accepted during hangup; new delegated input still requires client
-presence. Confirmed hangup is not sent again by shutdown or a repeated public end request. Unknown provider
-lifetimes retain the existing explicit refusal marker.
-
-Revoking or replacing a visual grant invalidates its pending capture requests and
-its next-frame selection. A delegation rechecks the same unexpired originating
-grant after reading the immutable frame bytes. Retained artifacts stay available
-through their authorized resource boundary; revocation does not delete history.
-
-`close()` is idempotent and refuses new public effects and new worker input/read
-callbacks. Final transcript/status/usage delivery can settle. It waits for the
-complete admitted callback and private fence-transition lifetimes before closing
-the worker, journals or directory lease. A callback that continues working keeps
-shutdown pending; callers must await the complete callback lifetime rather than
-spawn unreported background effects. The process supervisor must acquire the
-actual configured quiescence participants before replacing a process.
-
-| Owner lifetime | Busy/unknown evidence | End or cancellation boundary |
-| --- | --- | --- |
-| Connect, preview, configuration, defaults | Complete HTTP/action callback, startup guard; durable connect marker | Await original result; uncertain provider call remains unverified |
-| Provider sideband, observer, background voice work | Python owners, call tasks, pump/observer and RPC callbacks | Hangup closes transport and observer; accepted delegation continues |
-| Host delegation, usage, session reads/updates | Complete Node callback promise; Python pending callback | Shutdown awaits admitted promise; no command replay |
-| Transcript native delivery | Durable indexed pending/unknown intent, active drain | Known `busy/retryable/executed:false` alone permits exact retry; unknown stays fenced |
-| Browser capture request | Client/session/grant-bound request with 30-second completion window | Revoke/replace/detach invalidates selection; no device state on disk |
-| In-flight visual/native callback or PNG validation | Complete Node effect; Python effect/helper subprocess | Revocation discards a late frame but does not hide running callback |
-| Native foreground helper | Bounded stdout, deadline and awaited child lifetime | Cancellation kills and reaps child before returning |
-| Private acquire/release | Held durable fence and in-flight transition | Shutdown awaits transition; exact proof/outcome needed for release |
-
-The optional installed acceptance tests use `MEDIA_NATIVE_PYTHON`,
-`MEDIA_NATIVE_ADMIN_MODULE` and `MEDIA_NATIVE_HOST_MODULE` pointing to sealed public
-native/host packages. The supplied peers run read-only with
-`PYTHONDONTWRITEBYTECODE=1`; all test native homes, application homes, provider
-fixtures and ports are owned temporary state. No model prompt is submitted.
-`native-transcript-acceptance.test.mjs` checks native canonical bytes and media
-selected projections after reconnect/restart, including final text after detach.
-The known-busy admission in that scenario is an explicit pre-effect fixture.
-
-Run `python scripts/qualify-installed.py --output <owned-output> --python python3`
-to pack and install this owner in separate Node/Python consumers, compare every
-packaged implementation file with source, and run the relocated suites. Missing
-native peers remain visible skips. `test_voice_defaults.py` exercises the actual
-worker's model selection with a no-network call fixture: future defaults apply,
-and a failed preferred model does not attempt automatic fallback.
-
-These checks do not qualify browser gestures, microphone/camera/speaker, native
-screen permission, real audio, provider accounts, OS service stop or deployed
-adoption. F02.04's browser/device boundary remains with the client owner.
-
-
-### Existing-store startup safety
-
-Media validates all configured authoritative stores under its existing lifetime
-exclusion lease before any authority opens writable. Read-only preflight checks
-fixed table and referenced-column metadata only: quiescence `fence`, `receipts`
-and `calls`; transcript `intents`; and, when shared voice preferences are
-configured, the account-bound preference `commands` journal. Missing authority
-refuses startup without schema repair, guessed replay or inferred provider closure.
-Partial startup failures close their database handles and release ownership.
-
-New authority initializes only when its main database and all WAL, SHM and
-rollback-journal paths are absent. Empty or dangling sidecars are surviving
-evidence, and a dangling main path cannot be treated as fresh. Read-only SQLite
-may update derived SHM or create empty coordination sidecars; refused startup
-preserves authoritative main and pre-existing nonempty WAL contents.
-
-The transcript `history` table remains a derived, native-confirmed projection.
-Its existing empty-table rebuild and index creation are preserved after append
-intent validation, without native-history reads, append replay or a full-store
-scan. Disabled shared preferences remain optional; startup does not open their
-store or invent an action.
-
-This guard does not detect arbitrary schema or constraint tampering, general
-individual-row deletion, or disappearance of a main database together with all
-its sidecars. It adds no migration inferred from missing authority and no copied
-or mirrored database. Native history, settings and receipts remain with their
-existing owners; this JS startup guard does not qualify the Python dependency
-graph, physical devices or provider accounts.
+This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft
+trademarks or logos is subject to and must follow
+[Microsoft's Trademark & Brand Guidelines](https://www.microsoft.com/legal/intellectualproperty/trademarks/usage/general).
+Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship.
+Any use of third-party trademarks or logos are subject to those third-party's policies.

@@ -28,7 +28,7 @@ separate facts.
 ## Public promises and falsifiers
 
 The M identifiers below are local traceability labels, not new wire operations.
-The [README](../README.md) remains the concrete factory/callback and HTTP interface
+The [integration guide](../docs/integration.md) documents the factory/callback and HTTP interface
 reference; [preferences schemas](../src/preferences.js), the runtime manifest in
 [src/index.js](../src/index.js), and owning upstream schemas remain authoritative
 for their fields. Consumers must not infer an unadvertised extension from prose.
@@ -73,7 +73,7 @@ These restate existing interface ownership rather than granting new permissions:
   The distinct authenticated pre-retirement admission-abort callback additionally
   requires the original attempted-acquisition record and exact owner receipt;
   absent or replacement-worker state cannot establish non-acquisition. See the
-  [concrete adapter and crash boundary](../README.md#pre-retirement-admission-abort).
+  [concrete adapter and crash boundary](../docs/integration.md#pre-retirement-admission-abort).
 - Release/integration owner: name exact source/package/peer revisions, archive
   hashes, skipped scenarios and loaded-worker evidence. Use CD impact review for
   changed meaning; unsupported client/device/provider work is not retired by omission.
