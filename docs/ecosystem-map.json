@@ -1,0 +1,100 @@
+{
+  "audience": "Developers composing host media support",
+  "citations": [
+    {
+      "path": "README.md",
+      "ref": "77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a",
+      "sha256": "2bc7ae0a055d96180b82c7259bde0f1041dcb59f5ed125e6ec1eca30990c9112",
+      "url": "https://github.com/microsoft/amplifier-unified-capability-media/blob/77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a/README.md"
+    },
+    {
+      "path": "contracts/media.v1.md",
+      "ref": "77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a",
+      "sha256": "8cf64c07d10df6d6a99d71ce44efea8546fe304828458763055db8eb4d4c67fc",
+      "url": "https://github.com/microsoft/amplifier-unified-capability-media/blob/77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a/contracts/media.v1.md"
+    }
+  ],
+  "display_name": "Amplifier Unified Media",
+  "edges": [
+    {
+      "from": "host",
+      "relation": "uses",
+      "to": "self"
+    },
+    {
+      "from": "self",
+      "relation": "contains",
+      "to": "gateway"
+    },
+    {
+      "from": "self",
+      "relation": "contains",
+      "to": "transcripts"
+    },
+    {
+      "from": "self",
+      "relation": "contains",
+      "to": "worker"
+    },
+    {
+      "from": "client",
+      "relation": "uses",
+      "to": "gateway"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "self",
+      "kind": "self",
+      "label": "Amplifier Unified Media",
+      "repository": "microsoft/amplifier-unified-capability-media"
+    },
+    {
+      "id": "host",
+      "kind": "external",
+      "label": "Amplifier Unified host",
+      "repository": "microsoft/amplifier-unified-host"
+    },
+    {
+      "id": "gateway",
+      "kind": "internal",
+      "label": "Media gateway and leases"
+    },
+    {
+      "id": "transcripts",
+      "kind": "internal",
+      "label": "Transcript delivery"
+    },
+    {
+      "id": "worker",
+      "kind": "internal",
+      "label": "Optional Python voice worker"
+    },
+    {
+      "id": "client",
+      "kind": "external",
+      "label": "Browser media client"
+    }
+  ],
+  "notes": [
+    "This is supporting library functionality, not a standalone voice Experience or universal Constellation Connection implementation.",
+    "Client owns device gestures; host owns authorization/admission and native session history.",
+    "The intended Constellation platform-realtime repository is not substituted for this existing Unified package."
+  ],
+  "page_kind": "capability library",
+  "purpose": "Add voice, transcript delivery and authorized visual capture to an Amplifier Unified host.",
+  "ref": "77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a",
+  "repository": "microsoft/amplifier-unified-capability-media",
+  "roles": [],
+  "start_cta": {
+    "basis": "Existing approved README route; target release assets/availability not freshly audited in this plan.",
+    "label": "Integrate media support",
+    "url": "https://github.com/microsoft/amplifier-unified-capability-media#get-started"
+  },
+  "summary": "An optional media capability inside a composed Amplifier Unified host.",
+  "supports_roles": [
+    "Experience",
+    "Connection"
+  ],
+  "visibility": "private"
+}

@@ -60,6 +60,27 @@ Keep private media records separate from native session history.
 
 For development, see the [media contract](contracts/media.v1.md) and [AGENTS.md](AGENTS.md).
 
+
+<!-- ecosystem-map:start -->
+## Where this fits
+
+An optional media capability inside a composed Amplifier Unified host.
+
+Supports: Experience, Connection.
+
+![Ecosystem roles and component relationships](docs/ecosystem-map.svg)
+
+[Open the map](docs/ecosystem-map.svg) · [Product page source (private)](docs/product/index.html) · [Map guide](https://github.com/microsoft/amplifier-constellation/blob/main/docs/ecosystem-maps.md)
+
+<details>
+<summary>The five shared building blocks</summary>
+
+[![Experience, Conversation, Agent Instance, Connection and Tool](https://raw.githubusercontent.com/microsoft/amplifier-constellation/main/site/assets/art/building-blocks.png)](https://microsoft.github.io/amplifier-constellation/)
+
+</details>
+
+<!-- ecosystem-map:end -->
+
 ## Contributing
 
 Most contributions require you to agree to a
