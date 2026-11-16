@@ -2,16 +2,18 @@
   "audience": "Developers composing host media support",
   "citations": [
     {
+      "git_blob": "a603f49e5d3c72109987301bb6e58b3da7f2542e",
       "path": "README.md",
-      "ref": "77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a",
-      "sha256": "2bc7ae0a055d96180b82c7259bde0f1041dcb59f5ed125e6ec1eca30990c9112",
-      "url": "https://github.com/microsoft/amplifier-unified-capability-media/blob/77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a/README.md"
+      "ref": "b2abfc0b22985a3dc3e725730d097ef924b1d239",
+      "sha256": "a7657412e274d6c5e42c393741674baeec98ef09cbef13bf42cb7c2876aabe6f",
+      "url": "https://github.com/microsoft/amplifier-unified-capability-media/blob/b2abfc0b22985a3dc3e725730d097ef924b1d239/README.md"
     },
     {
+      "git_blob": "f5e268112ceec12bf961f1d2c89dc2df73b64b06",
       "path": "contracts/media.v1.md",
-      "ref": "77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a",
+      "ref": "b2abfc0b22985a3dc3e725730d097ef924b1d239",
       "sha256": "8cf64c07d10df6d6a99d71ce44efea8546fe304828458763055db8eb4d4c67fc",
-      "url": "https://github.com/microsoft/amplifier-unified-capability-media/blob/77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a/contracts/media.v1.md"
+      "url": "https://github.com/microsoft/amplifier-unified-capability-media/blob/b2abfc0b22985a3dc3e725730d097ef924b1d239/contracts/media.v1.md"
     }
   ],
   "display_name": "Amplifier Unified Media",
@@ -83,7 +85,7 @@
   ],
   "page_kind": "capability library",
   "purpose": "Add voice, transcript delivery and authorized visual capture to an Amplifier Unified host.",
-  "ref": "77f9a4ef6655c03a633d4f9c3fa95802ec5fbd6a",
+  "ref": "b2abfc0b22985a3dc3e725730d097ef924b1d239",
   "repository": "microsoft/amplifier-unified-capability-media",
   "roles": [],
   "start_cta": {
@@ -96,5 +98,5 @@
     "Experience",
     "Connection"
   ],
-  "visibility": "private"
+  "visibility": "public"
 }
